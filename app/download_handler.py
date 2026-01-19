@@ -136,35 +136,55 @@ class DownloadHandler:
     async def _fetch_links_from_cloud(
         self,
         source_url: str,
-        mirror: Optional[str] = None
+        mirror: Optional[str] = None,
+        release_id: Optional[str] = None,
+        max_retries: int = 3,
     ) -> list[str]:
-        """Fetch download links from DDLnzb Cloud API."""
-        try:
-            async with httpx.AsyncClient() as client:
-                headers = {}
-                if config.DDLNZB_API_KEY:
-                    headers["X-API-Key"] = config.DDLNZB_API_KEY
-                
-                # Extract release ID from source URL or use directly
-                params = {"source_url": source_url}
-                if mirror:
-                    params["hoster"] = mirror
-                
-                response = await client.get(
-                    f"{config.DDLNZB_API_URL}/api/v1/links/by-source",
-                    params=params,
-                    headers=headers,
-                    timeout=30,
-                )
+        """Fetch download links from DDLnzb Cloud API with retries."""
+        backoff = 1
+        endpoint = "by-source"
+        params: dict[str, str] = {}
+        if release_id:
+            endpoint = release_id
+        else:
+            params["source_url"] = source_url
+            if mirror:
+                params["hoster"] = mirror
+        
+        headers = {}
+        if config.DDLNZB_API_KEY:
+            headers["X-API-Key"] = config.DDLNZB_API_KEY
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                url = f"{config.DDLNZB_API_URL}/api/v1/links/{endpoint}"
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        url,
+                        params=params or None,
+                        headers=headers,
+                        timeout=30,
+                    )
                 
                 if response.status_code == 200:
                     data = response.json()
-                    return [link["url"] for link in data.get("links", [])]
-                
-                return []
-        except Exception as e:
-            print(f"Failed to fetch links: {e}")
-            return []
+                    links = [link["url"] for link in data.get("links", []) if link.get("url")]
+                    if links:
+                        return links
+                    print(f"Cloud returned no links for release {release_id or source_url}")
+                    return []
+                elif response.status_code in (404, 410):
+                    print(f"Release not found for {release_id or source_url}")
+                    return []
+                else:
+                    print(f"Cloud error {response.status_code}: {response.text}")
+            except httpx.RequestError as e:
+                print(f"Cloud request failed (attempt {attempt}): {e}")
+            except Exception as e:
+                print(f"Unexpected cloud error (attempt {attempt}): {e}")
+            await asyncio.sleep(backoff)
+            backoff *= 2
+        return []
     
     async def _monitor_jdownloader(self, nzo_id: str, package_name: str):
         """Monitor JDownloader download progress."""
