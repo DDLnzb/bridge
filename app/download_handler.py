@@ -46,7 +46,8 @@ class DownloadHandler:
             try:
                 # Process pending downloads
                 for nzo_id, item in list(download_queue.items()):
-                    if item.status == "Downloading" and item.percentage == 0:
+                    if item.status == "Queued":
+                        update_progress(nzo_id, 0, "Starting download...")
                         await self._process_download(nzo_id, item)
                 
                 await asyncio.sleep(5)
@@ -60,12 +61,18 @@ class DownloadHandler:
             update_progress(nzo_id, 5, "Fetching links...")
             
             # Parse payload to get release info
-            release_info = self._parse_payload(item.filename)
+            payload_source = item.payload or item.filename
+            release_info = self._parse_payload(payload_source)
             if not release_info:
                 fail_download(nzo_id, "Invalid payload")
                 return
             
             title, source_url, mirror, size, password, imdb_id = release_info
+            if size and size > 0:
+                size_mb = f"{size / (1024 * 1024):.2f} MB"
+                item.size = size_mb
+                item.sizeleft = size_mb
+            item.release_id = source_url
             
             update_progress(nzo_id, 10, "Getting download links...")
             

@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import config
 from app.sabnzbd_api import router as sabnzbd_router
 from app.jdownloader import jdownloader
+from app.download_handler import download_handler
 
 
 @asynccontextmanager
@@ -35,9 +36,16 @@ async def lifespan(app: FastAPI):
     else:
         print("JDownloader credentials not configured")
     
+    # Start download handler loop
+    try:
+        await download_handler.start()
+    except Exception as e:
+        print(f"Failed to start download handler: {e}")
+    
     yield
     
     # Cleanup
+    await download_handler.stop()
     await jdownloader.disconnect()
     print("DDLnzb Bridge stopped")
 
