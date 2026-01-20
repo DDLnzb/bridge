@@ -148,7 +148,7 @@ class DownloadHandler:
             endpoint = release_id
         else:
             params["source_url"] = source_url
-            if mirror:
+            if mirror and mirror != "*":
                 params["hoster"] = mirror
         
         headers = {}

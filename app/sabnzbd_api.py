@@ -6,10 +6,12 @@ Implements SABnzbd API endpoints for compatibility mit *arr apps.
 
 import base64
 import json
+import logging
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -18,11 +20,74 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import config
 
+
+logger = logging.getLogger("ddlnzb.bridge")
+STATE_PATH = Path(config.STATE_FILE).expanduser()
+
 router = APIRouter()
 
 # In-memory queue and history
 download_queue: Dict[str, "QueueItem"] = {}
 download_history: Dict[str, "HistoryItem"] = {}
+
+
+def _serialize_queue_item(item: "QueueItem") -> dict:
+    data = asdict(item)
+    data["added_at"] = item.added_at.isoformat()
+    return data
+
+
+def _serialize_history_item(item: "HistoryItem") -> dict:
+    data = asdict(item)
+    data["completed_at"] = item.completed_at.isoformat()
+    return data
+
+
+def _deserialize_queue_item(data: dict) -> "QueueItem":
+    data = data.copy()
+    if data.get("added_at"):
+        data["added_at"] = datetime.fromisoformat(data["added_at"])
+    return QueueItem(**data)
+
+
+def _deserialize_history_item(data: dict) -> "HistoryItem":
+    data = data.copy()
+    if data.get("completed_at"):
+        data["completed_at"] = datetime.fromisoformat(data["completed_at"])
+    return HistoryItem(**data)
+
+
+def _persist_state() -> None:
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "queue": [_serialize_queue_item(item) for item in download_queue.values()],
+            "history": [_serialize_history_item(item) for item in download_history.values()],
+        }
+        STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to persist bridge state: %s", exc)
+
+
+def _load_state() -> None:
+    if not STATE_PATH.exists():
+        return
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        download_queue.clear()
+        for item in data.get("queue", []):
+            qi = _deserialize_queue_item(item)
+            download_queue[qi.nzo_id] = qi
+        download_history.clear()
+        for item in data.get("history", []):
+            hi = _deserialize_history_item(item)
+            download_history[hi.nzo_id] = hi
+        logger.info("Restored bridge state: %s queue items, %s history entries", len(download_queue), len(download_history))
+    except Exception as exc:
+        logger.warning("Failed to load bridge state: %s", exc)
+
+
+_load_state()
 
 
 @dataclass
@@ -59,6 +124,7 @@ class HistoryItem:
     # DDLnzb spezifisch
     release_id: Optional[str] = None
     payload: Optional[str] = None
+    links: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -136,6 +202,9 @@ async def sabnzbd_api(
     elif mode == "addfile":
         return await _add_file(request, nzbname, cat, output)
     
+    elif mode == "ddlnzb_links":
+        return _get_links_response(nzo_id, output)
+    
     elif mode == "delete":
         return _delete_item(nzo_id, output)
     
@@ -175,6 +244,7 @@ def _get_queue(output: str):
             "sizeleft": item.sizeleft,
             "eta": item.eta,
             "timeleft": item.timeleft,
+            "links": item.links,
         })
     
     return _json_or_text({
@@ -202,6 +272,7 @@ def _get_history(output: str):
             "size": item.size,
             "completed": int(item.completed_at.timestamp()),
             "storage": item.storage,
+            "links": item.links,
         })
     
     return _json_or_text({
@@ -256,6 +327,7 @@ def _delete_item(nzo_id: str, output: str):
     """Delete item from queue."""
     if nzo_id in download_queue:
         del download_queue[nzo_id]
+        _persist_state()
         return _json_or_text({"status": True}, output)
     return _error_response(f"Item not found: {nzo_id}", output)
 
@@ -274,23 +346,30 @@ def _retry_item(nzo_id: str, output: str):
         )
         download_queue[nzo_id] = queue_item
         del download_history[nzo_id]
+        _persist_state()
         return _json_or_text({"status": True}, output)
     return _error_response(f"Item not found: {nzo_id}", output)
 
 
-def _get_fullstatus(output: str):
-    """Get full status including queue and history."""
-    queue_data = _get_queue("json").body
-    history_data = _get_history("json").body
-    
-    return _json_or_text({
-        "status": {
-            "state": "DOWNLOADING" if download_queue else "IDLE",
-            "speed": "0",
-            "queue": json.loads(queue_data)["queue"],
-            "history": json.loads(history_data)["history"],
-        }
-    }, output)
+def _get_links_response(nzo_id: Optional[str], output: str):
+    """Return stored links for an NZO entry (fallback for manual downloads)."""
+    if not nzo_id:
+        return _error_response("nzo_id missing", output)
+    if nzo_id in download_queue:
+        item = download_queue[nzo_id]
+        return _json_or_text({
+            "status": "queue",
+            "nzo_id": nzo_id,
+            "links": item.links,
+        }, output)
+    if nzo_id in download_history:
+        item = download_history[nzo_id]
+        return _json_or_text({
+            "status": "history",
+            "nzo_id": nzo_id,
+            "links": item.links,
+        }, output)
+    return _error_response(f"nzo_id not found: {nzo_id}", output)
 
 
 # Helper functions for queue management
@@ -310,6 +389,7 @@ def complete_download(nzo_id: str, storage_path: str):
         )
         download_history[nzo_id] = history_item
         del download_queue[nzo_id]
+        _persist_state()
 
 
 def fail_download(nzo_id: str, error: str):
@@ -324,6 +404,7 @@ def fail_download(nzo_id: str, error: str):
             size=item.size,
             release_id=item.release_id,
             payload=item.payload,
+            links=item.links,
         )
         download_history[nzo_id] = history_item
         del download_queue[nzo_id]
@@ -335,6 +416,25 @@ def update_progress(nzo_id: str, percentage: int, status: str = None):
         download_queue[nzo_id].percentage = percentage
         if status:
             download_queue[nzo_id].status = status
+
+
+def mark_manual_download(nzo_id: str, message: str):
+    """Move item to history with manual-download status."""
+    if nzo_id in download_queue:
+        item = download_queue[nzo_id]
+        history_item = HistoryItem(
+            nzo_id=item.nzo_id,
+            name=item.filename,
+            category=item.category,
+            status=message,
+            size=item.size,
+            storage="",
+            release_id=item.release_id,
+            payload=item.payload,
+            links=item.links,
+        )
+        download_history[nzo_id] = history_item
+        del download_queue[nzo_id]
 
 
 def _enqueue_payload(payload: str, nzbname: Optional[str], category: Optional[str]) -> QueueItem:
@@ -356,6 +456,7 @@ def _enqueue_payload(payload: str, nzbname: Optional[str], category: Optional[st
         payload=payload,
     )
     download_queue[nzo_id] = item
+    _persist_state()
     return item
 
 
