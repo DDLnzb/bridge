@@ -31,6 +31,9 @@ class BridgeConfig:
     # Category Mapping (SABnzbd category -> JDownloader folder)
     CATEGORY_MAPPING: dict = None
     
+    # Persistence
+    STATE_FILE: str = os.getenv("DDLNZB_STATE_FILE", "./ddlnzb_bridge_state.json")
+    
     def __post_init__(self):
         if self.CATEGORY_MAPPING is None:
             self.CATEGORY_MAPPING = {
