@@ -10,7 +10,7 @@ packages = [{include = "src"}]
 python = "^3.11"
 fastapi = "^0.109.0"
 uvicorn = {extras = ["standard"], version = "^0.27.0"}
-httpx = "^0.26.0"
+httpx = "^0.28.1"
 pydantic = "^2.5.3"
 pydantic-settings = "^2.1.0"
 myjdapi = "^1.1.6"
