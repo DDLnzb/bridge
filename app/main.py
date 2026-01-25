@@ -5,6 +5,7 @@ Local bridge that acts as SABnzbd for *arr apps and sends downloads to JDownload
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -15,6 +16,11 @@ from app.config import config
 from app.sabnzbd_api import router as sabnzbd_router
 from app.jdownloader import jdownloader
 from app.download_handler import download_handler
+
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager

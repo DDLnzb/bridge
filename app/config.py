@@ -17,11 +17,13 @@ class BridgeConfig:
     # Bridge Server
     BRIDGE_HOST: str = os.getenv("BRIDGE_HOST", "127.0.0.1")
     BRIDGE_PORT: int = int(os.getenv("BRIDGE_PORT", "8080"))
+    LOG_LEVEL: str = os.getenv("BRIDGE_LOG_LEVEL", "INFO")
     
     # JDownloader
     MYJD_EMAIL: str = os.getenv("MYJD_EMAIL", "")
     MYJD_PASSWORD: str = os.getenv("MYJD_PASSWORD", "")
     MYJD_DEVICE_NAME: str = os.getenv("MYJD_DEVICE_NAME", "")
+    MYJD_APP_KEY: str = os.getenv("MYJD_APP_KEY", "DDLnzb")
     
     # Download Settings
     DOWNLOAD_DIR: str = os.getenv("DOWNLOAD_DIR", "./downloads")
