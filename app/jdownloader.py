@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import time
 from base64 import b64decode, b64encode
 from typing import Any, Dict, List, Optional
@@ -20,11 +21,14 @@ from Crypto.Util.Padding import pad, unpad
 from app.config import config
 
 
+logger = logging.getLogger("ddlnzb.bridge.jdownloader")
+
+
 class MyJDownloaderAPI:
     """My JDownloader API client."""
     
     API_URL = "https://api.jdownloader.org"
-    APP_KEY = "DDLnzb"
+    APP_KEY = config.MYJD_APP_KEY
     
     def __init__(self, email: str = None, password: str = None, device_name: str = None):
         self.email = email or config.MYJD_EMAIL
@@ -37,6 +41,7 @@ class MyJDownloaderAPI:
         self.device_secret: Optional[bytes] = None
         self.server_encryption_token: Optional[bytes] = None
         self.device_encryption_token: Optional[bytes] = None
+        self.last_error: Optional[str] = None
         
         self._request_id = int(time.time() * 1000)
     
@@ -72,40 +77,60 @@ class MyJDownloaderAPI:
     async def connect(self) -> bool:
         """Connect to My JDownloader API."""
         if not self.email or not self.password:
-            raise ValueError("Email and password required")
+            self.last_error = "Email and password required"
+            raise ValueError(self.last_error)
         
         login_secret = self._secret(self.email, self.password, "server")
         device_secret = self._secret(self.email, self.password, "device")
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.API_URL}/my/connect",
-                params={
-                    "email": self.email,
-                    "appkey": self.APP_KEY,
-                },
-                data=self._encrypt(
-                    json.dumps({"email": self.email, "appkey": self.APP_KEY}),
-                    login_secret
-                ),
-            )
-            
-            if response.status_code != 200:
-                return False
-            
-            data = json.loads(self._decrypt(response.text, login_secret))
-            
-            self.session_token = data.get("sessiontoken")
-            self.regain_token = data.get("regaintoken")
-            
-            # Generate encryption tokens
-            self.server_encryption_token = hashlib.sha256(
-                login_secret + bytes.fromhex(self.session_token)
-            ).digest()
-            
-            self.device_secret = device_secret
-            
-            return True
+        logger.debug("Connecting to MyJDownloader appkey=%s email_configured=%s device=%s",
+                     self.APP_KEY,
+                     bool(self.email),
+                     self.device_name)
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.API_URL}/my/connect",
+                    params={
+                        "email": self.email,
+                        "appkey": self.APP_KEY,
+                    },
+                    data=self._encrypt(
+                        json.dumps({"email": self.email, "appkey": self.APP_KEY}),
+                        login_secret
+                    ),
+                )
+        except httpx.HTTPError as exc:
+            self.last_error = f"HTTP error during connect: {exc}"
+            logger.error(self.last_error)
+            raise
+        
+        if response.status_code != 200:
+            body_preview = response.text[:200]
+            self.last_error = f"MyJD login failed with HTTP {response.status_code}: {body_preview}"
+            logger.error(self.last_error)
+            raise RuntimeError(self.last_error)
+        
+        data = json.loads(self._decrypt(response.text, login_secret))
+        
+        self.session_token = data.get("sessiontoken")
+        self.regain_token = data.get("regaintoken")
+        
+        if not self.session_token:
+            self.last_error = "MyJD login succeeded but sessiontoken missing"
+            logger.error(self.last_error)
+            raise RuntimeError(self.last_error)
+        
+        # Generate encryption tokens
+        self.server_encryption_token = hashlib.sha256(
+            login_secret + bytes.fromhex(self.session_token)
+        ).digest()
+        
+        self.device_secret = device_secret
+        self.last_error = None
+        logger.info("MyJDownloader login succeeded")
+        
+        return True
     
     async def get_devices(self) -> List[Dict[str, Any]]:
         """Get list of connected devices."""
@@ -209,7 +234,8 @@ class MyJDownloaderAPI:
     async def _api_call(self, path: str, params: dict = None) -> Dict[str, Any]:
         """Make API call to My JDownloader."""
         if not self.session_token:
-            raise ValueError("Not connected")
+            self.last_error = "Not connected"
+            raise ValueError(self.last_error)
         
         query = f"sessiontoken={self.session_token}&rid={self._get_request_id()}"
         if params:
@@ -233,7 +259,8 @@ class MyJDownloaderAPI:
     async def _device_call(self, path: str, params: list = None) -> Any:
         """Make API call to device."""
         if not self.device_id or not self.device_encryption_token:
-            raise ValueError("Device not connected")
+            self.last_error = "Device not connected"
+            raise ValueError(self.last_error)
         
         rid = self._get_request_id()
         
@@ -279,6 +306,26 @@ class MyJDownloaderAPI:
             self.device_id = None
         
         return True
+
+    async def debug_snapshot(self) -> Dict[str, Any]:
+        """Return diagnostic information about the current JD connection."""
+        snapshot: Dict[str, Any] = {
+            "email_configured": bool(self.email),
+            "device_name": self.device_name,
+            "session_token_cached": bool(self.session_token),
+            "device_id_cached": self.device_id,
+            "last_error": self.last_error,
+        }
+        if self.session_token:
+            try:
+                devices = await self.get_devices()
+            except Exception as exc:  # pragma: no cover - debug helper
+                snapshot["device_list_error"] = str(exc)
+            else:
+                snapshot["available_devices"] = [
+                    device.get("name") for device in devices.get("list", [])
+                ]
+        return snapshot
 
 
 # Global instance
