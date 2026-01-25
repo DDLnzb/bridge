@@ -4,6 +4,17 @@ DDLnzb Bridge - Configuration
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+
+# Load .env automatically for local runs; do nothing if file is missing
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
 
 
 @dataclass
@@ -44,6 +55,11 @@ class BridgeConfig:
                 "music": "Music",
                 "books": "Books",
                 "software": "Software",
+                "radarr": "Movies",
+                "sonarr": "TV",
+                "lidarr": "Music",
+                "lazy_librarian": "Books",
+                "whisparr": "Adult",
             }
 
 

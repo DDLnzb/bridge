@@ -178,13 +178,21 @@ async def sabnzbd_api(
         return _json_or_text({"version": "4.0.0-ddlnzb"}, output)
     
     elif mode == "get_config":
-        return _json_or_text({
-            "config": {
-                "misc": {
-                    "complete_dir": config.DOWNLOAD_DIR,
+        categories = [
+            {"name": name, "dir": target}
+            for name, target in (config.CATEGORY_MAPPING or {}).items()
+        ]
+        return _json_or_text(
+            {
+                "config": {
+                    "misc": {
+                        "complete_dir": config.DOWNLOAD_DIR,
+                    },
+                    "categories": categories,
                 }
-            }
-        }, output)
+            },
+            output,
+        )
     
     elif mode == "get_cats":
         categories = list(config.CATEGORY_MAPPING.keys())
@@ -281,6 +289,27 @@ def _get_history(output: str):
             "slots": slots,
         }
     }, output)
+
+
+def _get_fullstatus(output: str):
+    """Return combined status for SABnzbd clients."""
+    queue = _get_queue("json").body
+    history = _get_history("json").body
+    try:
+        queue_data = json.loads(queue)
+        history_data = json.loads(history)
+    except Exception:
+        queue_data = {"queue": {"noofslots": 0, "slots": []}}
+        history_data = {"history": {"noofslots": 0, "slots": []}}
+
+    payload = {
+        "status": {
+            "state": "Downloading" if queue_data.get("queue", {}).get("slots") else "Idle"
+        },
+        "queue": queue_data.get("queue", {}),
+        "history": history_data.get("history", {}),
+    }
+    return _json_or_text(payload, output)
 
 
 async def _add_url(url: str, nzbname: str, category: str, output: str):

@@ -8,6 +8,8 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,12 +23,31 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+if config.LOG_LEVEL.upper() == "DEBUG":
+    logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     print(f"Starting DDLnzb Bridge on {config.BRIDGE_HOST}:{config.BRIDGE_PORT}")
+    logger = logging.getLogger("ddlnzb.bridge")
+    if not config.DDLNZB_API_KEY:
+        logger.warning("DDLnzb API key not configured")
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{config.DDLNZB_API_URL}/health")
+        if response.status_code == 200:
+            logger.info("DDLnzb API reachable: %s", config.DDLNZB_API_URL)
+        else:
+            logger.error(
+                "DDLnzb API unreachable (status %s): %s",
+                response.status_code,
+                config.DDLNZB_API_URL,
+            )
+    except Exception as exc:
+        logger.error("DDLnzb API connection failed: %s (%s)", config.DDLNZB_API_URL, exc)
     
     # Connect to JDownloader if credentials are configured
     if config.MYJD_EMAIL and config.MYJD_PASSWORD:
