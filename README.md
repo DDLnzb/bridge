@@ -47,3 +47,7 @@ docker run -d \
 | `DOWNLOAD_PATH_MOVIES` | Download path for movies | No |
 | `DOWNLOAD_PATH_TV` | Download path for TV shows | No |
 | `DOWNLOAD_PATH_DOCS` | Download path for documents | No |
+
+## Local development
+
+Beim lokalen Start außerhalb von Docker lädt die Anwendung automatisch die Datei `bridge/.env`. Lege dort alle benötigten Schlüssel ab (siehe Tabelle oben) und starte anschließend zum Beispiel mit `poetry run uvicorn app.main:app --reload`. Weitere Schritte sind nicht nötig – die Variablen stehen sofort zur Verfügung.

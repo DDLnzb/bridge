@@ -175,6 +175,18 @@ class DownloadHandler:
         headers = {}
         if config.DDLNZB_API_KEY:
             headers["X-API-Key"] = config.DDLNZB_API_KEY
+
+        logger.info(
+            "Connecting to DDLnzb API for links: base_url=%s endpoint=%s",
+            config.DDLNZB_API_URL,
+            endpoint,
+        )
+        logger.debug(
+            "DDLnzb API request details: url=%s params=%s api_key_configured=%s",
+            f"{config.DDLNZB_API_URL}/api/v1/links/{endpoint}",
+            params or None,
+            bool(config.DDLNZB_API_KEY),
+        )
         
         for attempt in range(1, max_retries + 1):
             try:
@@ -191,6 +203,11 @@ class DownloadHandler:
                     data = response.json()
                     links = [link["url"] for link in data.get("links", []) if link.get("url")]
                     if links:
+                        logger.info(
+                            "DDLnzb API returned %s links for %s",
+                            len(links),
+                            release_id or source_url,
+                        )
                         logger.debug(
                             "Received %s links from cloud (release=%s attempt=%s)",
                             len(links),
@@ -229,6 +246,11 @@ class DownloadHandler:
                 )
             await asyncio.sleep(backoff)
             backoff *= 2
+        logger.error(
+            "DDLnzb API unreachable after %s attempts: %s",
+            max_retries,
+            config.DDLNZB_API_URL,
+        )
         return []
     
     async def _monitor_jdownloader(self, nzo_id: str, package_name: str):
