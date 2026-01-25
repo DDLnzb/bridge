@@ -142,11 +142,19 @@ class DownloadHandler:
             parts = decoded.split("|")
             
             if len(parts) >= 6:
+                size_raw = parts[3]
+                if size_raw:
+                    if "." in size_raw:
+                        size = int(float(size_raw) * 1024 * 1024)
+                    else:
+                        size = int(size_raw)
+                else:
+                    size = 0
                 return (
                     parts[0],  # title
                     parts[1],  # source_url
                     parts[2] or None,  # mirror
-                    int(parts[3]) if parts[3] else 0,  # size
+                    size,  # size bytes
                     parts[4] or None,  # password
                     parts[5] or None,  # imdb_id
                 )
@@ -255,18 +263,21 @@ class DownloadHandler:
     
     async def _monitor_jdownloader(self, nzo_id: str, package_name: str):
         """Monitor JDownloader download progress."""
-        max_checks = 360  # 30 minutes max
-        check_interval = 5
-        
-        for _ in range(max_checks):
+        max_duration = 30 * 60  # 30 minutes max
+        active_interval = 5
+        idle_interval = 300  # 5 minutes
+        deadline = asyncio.get_event_loop().time() + max_duration
+
+        while asyncio.get_event_loop().time() < deadline:
             if nzo_id not in download_queue:
                 return  # Download was cancelled
             
             try:
                 packages = await jdownloader.get_packages()
-                
+                matched = False
                 for pkg in packages or []:
                     if package_name.lower() in pkg.get("name", "").lower():
+                        matched = True
                         # Calculate progress
                         bytes_loaded = pkg.get("bytesLoaded", 0)
                         bytes_total = pkg.get("bytesTotal", 1)
@@ -283,11 +294,11 @@ class DownloadHandler:
                             return
                         
                         break
-                
+
+                await asyncio.sleep(active_interval if matched else idle_interval)
             except Exception as e:
-                print(f"JDownloader monitoring error: {e}")
-            
-            await asyncio.sleep(check_interval)
+                logger.warning("JDownloader monitoring error: %s", e)
+                await asyncio.sleep(idle_interval)
         
         # Timeout
         fail_download(nzo_id, "Download timeout")
