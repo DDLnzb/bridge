@@ -525,7 +525,14 @@ def decode_payload(payload_str: str) -> Optional[PayloadInfo]:
         decoded = base64.urlsafe_b64decode(payload_str).decode("utf-8")
         parts = decoded.split("|")
         if len(parts) >= 6:
-            size = int(parts[3]) if parts[3] else 0
+            size_raw = parts[3]
+            if size_raw:
+                if "." in size_raw:
+                    size = int(float(size_raw) * 1024 * 1024)
+                else:
+                    size = int(size_raw)
+            else:
+                size = 0
             return PayloadInfo(
                 title=parts[0],
                 source_url=parts[1],
