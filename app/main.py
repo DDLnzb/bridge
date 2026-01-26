@@ -4,20 +4,18 @@ DDLnzb Bridge - Main Application
 Local bridge that acts as SABnzbd for *arr apps and sends downloads to JDownloader.
 """
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 import httpx
-
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import config
-from app.sabnzbd_api import router as sabnzbd_router
-from app.jdownloader import jdownloader
 from app.download_handler import download_handler
+from app.jdownloader import jdownloader
+from app.sabnzbd_api import router as sabnzbd_router
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -48,7 +46,7 @@ async def lifespan(app: FastAPI):
             )
     except Exception as exc:
         logger.error("DDLnzb API connection failed: %s (%s)", config.DDLNZB_API_URL, exc)
-    
+
     # Connect to JDownloader if credentials are configured
     if config.MYJD_EMAIL and config.MYJD_PASSWORD:
         try:
@@ -62,15 +60,15 @@ async def lifespan(app: FastAPI):
             print(f"Failed to connect to JDownloader: {e}")
     else:
         print("JDownloader credentials not configured")
-    
+
     # Start download handler loop
     try:
         await download_handler.start()
     except Exception as e:
         print(f"Failed to start download handler: {e}")
-    
+
     yield
-    
+
     # Cleanup
     await download_handler.stop()
     await jdownloader.disconnect()
