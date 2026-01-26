@@ -2,8 +2,8 @@
 DDLnzb Bridge - SABnzbd-compatible API for JDownloader Integration
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +14,7 @@ from src.config import settings
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
-    print(f"Starting DDLnzb Bridge")
+    print("Starting DDLnzb Bridge")
     print(f"API URL: {settings.DDLNZB_API_URL}")
     yield
     print("Shutting down DDLnzb Bridge")
@@ -61,7 +61,7 @@ async def sabnzbd_api(
 ) -> dict:
     """
     SABnzbd-compatible API endpoint.
-    
+
     Supported modes:
     - auth: Authentication check
     - version: Get version
@@ -73,13 +73,13 @@ async def sabnzbd_api(
     """
     if mode == "auth":
         return {"auth": "apikey"}
-    
+
     if mode == "version":
         return {"version": "3.7.1"}
-    
+
     if mode == "get_cats":
         return {"categories": ["*", "movies", "tv", "docs"]}
-    
+
     if mode == "get_config":
         return {
             "config": {
@@ -93,16 +93,16 @@ async def sabnzbd_api(
                 ],
             }
         }
-    
+
     if mode == "queue":
         # TODO: Get actual queue from JDownloader
         return {"queue": {"slots": []}}
-    
+
     if mode == "history":
         # TODO: Get actual history from JDownloader
         return {"history": {"slots": []}}
-    
+
     if mode == "fullstatus":
         return {"status": {"state": "idle"}}
-    
+
     return {"error": f"Unknown mode: {mode}"}
