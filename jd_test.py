@@ -1,6 +1,7 @@
-# -*- coding: utf-8 -*-
 import asyncio
+
 from app.jdownloader import MyJDownloaderAPI
+
 
 async def main():
     jd = MyJDownloaderAPI()
