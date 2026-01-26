@@ -12,7 +12,6 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Query, Request
@@ -20,15 +19,14 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import config
 
-
 logger = logging.getLogger("ddlnzb.bridge")
 STATE_PATH = Path(config.STATE_FILE).expanduser()
 
 router = APIRouter()
 
 # In-memory queue and history
-download_queue: Dict[str, "QueueItem"] = {}
-download_history: Dict[str, "HistoryItem"] = {}
+download_queue: dict[str, "QueueItem"] = {}
+download_history: dict[str, "HistoryItem"] = {}
 
 
 def _serialize_queue_item(item: "QueueItem") -> dict:
@@ -103,11 +101,11 @@ class QueueItem:
     eta: str = "unknown"
     timeleft: str = "0:00:00"
     added_at: datetime = field(default_factory=datetime.utcnow)
-    
+
     # DDLnzb specific
-    release_id: Optional[str] = None
-    links: List[str] = field(default_factory=list)
-    payload: Optional[str] = None
+    release_id: str | None = None
+    links: list[str] = field(default_factory=list)
+    payload: str | None = None
 
 
 @dataclass
@@ -120,11 +118,11 @@ class HistoryItem:
     size: str = "0 MB"
     completed_at: datetime = field(default_factory=datetime.utcnow)
     storage: str = ""
-    
+
     # DDLnzb spezifisch
-    release_id: Optional[str] = None
-    payload: Optional[str] = None
-    links: List[str] = field(default_factory=list)
+    release_id: str | None = None
+    payload: str | None = None
+    links: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -132,10 +130,10 @@ class PayloadInfo:
     """Dekodierte Payload-Informationen."""
     title: str
     source_url: str
-    mirror: Optional[str]
+    mirror: str | None
     size_bytes: int
-    password: Optional[str]
-    imdb_id: Optional[str]
+    password: str | None
+    imdb_id: str | None
 
 
 @router.get("/api")
@@ -152,7 +150,7 @@ async def sabnzbd_api(
 ):
     """
     SABnzbd-compatible API endpoint.
-    
+
     Supported modes:
     - auth: Check API key
     - version: Get version
@@ -163,20 +161,20 @@ async def sabnzbd_api(
     - delete: Delete from queue
     - retry: Retry failed download
     """
-    
+
     # Auth check using configured bridge key
     if not config.DDLNZB_API_KEY:
         return _error_response("Bridge API key not configured", output)
 
     if apikey != config.DDLNZB_API_KEY:
         return _error_response("Invalid API key", output)
-    
+
     if mode == "auth":
         return _json_or_text({"auth": "ok"}, output)
-    
+
     elif mode == "version":
         return _json_or_text({"version": "4.0.0-ddlnzb"}, output)
-    
+
     elif mode == "get_config":
         categories = [
             {"name": name, "dir": target}
@@ -193,35 +191,35 @@ async def sabnzbd_api(
             },
             output,
         )
-    
+
     elif mode == "get_cats":
         categories = list(config.CATEGORY_MAPPING.keys())
         return _json_or_text({"categories": ["*"] + categories}, output)
-    
+
     elif mode == "queue":
         return _get_queue(output)
-    
+
     elif mode == "history":
         return _get_history(output)
-    
+
     elif mode == "addurl":
         return await _add_url(name, nzbname, cat, output)
-    
+
     elif mode == "addfile":
         return await _add_file(request, nzbname, cat, output)
-    
+
     elif mode == "ddlnzb_links":
         return _get_links_response(nzo_id, output)
-    
+
     elif mode == "delete":
         return _delete_item(nzo_id, output)
-    
+
     elif mode == "retry":
         return _retry_item(nzo_id, output)
-    
+
     elif mode == "fullstatus":
         return _get_fullstatus(output)
-    
+
     else:
         return _error_response(f"Unknown mode: {mode}", output)
 
@@ -254,7 +252,7 @@ def _get_queue(output: str):
             "timeleft": item.timeleft,
             "links": item.links,
         })
-    
+
     return _json_or_text({
         "queue": {
             "status": "Downloading" if slots else "Idle",
@@ -282,7 +280,7 @@ def _get_history(output: str):
             "storage": item.storage,
             "links": item.links,
         })
-    
+
     return _json_or_text({
         "history": {
             "noofslots": len(slots),
@@ -315,19 +313,19 @@ def _get_fullstatus(output: str):
 async def _add_url(url: str, nzbname: str, category: str, output: str):
     """
     Add a download by URL.
-    
+
     The URL is expected to be a DDLnzb "fake NZB" URL containing
     the release ID in the payload.
     """
     if not url:
         return _error_response("No URL provided", output)
-    
+
     payload = _extract_payload_from_url(url)
     if not payload:
         return _error_response("Invalid DDLnzb URL payload", output)
 
     item = _enqueue_payload(payload, nzbname, category)
-    
+
     return _json_or_text({
         "status": True,
         "nzo_ids": [item.nzo_id],
@@ -339,13 +337,13 @@ async def _add_file(request: Request, nzbname: str, category: str, output: str):
     body = await request.body()
     if not body:
         return _error_response("NZB file missing", output)
-    
+
     payload = _extract_payload_from_nzb(body)
     if not payload:
         return _error_response("NZB payload missing", output)
-    
+
     item = _enqueue_payload(payload, nzbname, category)
-    
+
     return _json_or_text({
         "status": True,
         "nzo_ids": [item.nzo_id],
@@ -380,7 +378,7 @@ def _retry_item(nzo_id: str, output: str):
     return _error_response(f"Item not found: {nzo_id}", output)
 
 
-def _get_links_response(nzo_id: Optional[str], output: str):
+def _get_links_response(nzo_id: str | None, output: str):
     """Return stored links for an NZO entry (fallback for manual downloads)."""
     if not nzo_id:
         return _error_response("nzo_id missing", output)
@@ -466,7 +464,7 @@ def mark_manual_download(nzo_id: str, message: str):
         del download_queue[nzo_id]
 
 
-def _enqueue_payload(payload: str, nzbname: Optional[str], category: Optional[str]) -> QueueItem:
+def _enqueue_payload(payload: str, nzbname: str | None, category: str | None) -> QueueItem:
     """Create queue item inkl. Payload und Metadaten."""
     info = decode_payload(payload)
     nzo_id = f"SABnzbd_nzo_{uuid.uuid4().hex[:12]}"
@@ -489,7 +487,7 @@ def _enqueue_payload(payload: str, nzbname: Optional[str], category: Optional[st
     return item
 
 
-def _extract_payload_from_url(url: str) -> Optional[str]:
+def _extract_payload_from_url(url: str) -> str | None:
     """Read payload query parameter from Fake-NZB URL."""
     try:
         parsed = urlparse(url)
@@ -502,7 +500,7 @@ def _extract_payload_from_url(url: str) -> Optional[str]:
     return None
 
 
-def _extract_payload_from_nzb(data: bytes) -> Optional[str]:
+def _extract_payload_from_nzb(data: bytes) -> str | None:
     """Extract payload marker aus Fake-NZB Datei."""
     try:
         text = data.decode("utf-8", errors="ignore")
@@ -517,7 +515,7 @@ def _extract_payload_from_nzb(data: bytes) -> Optional[str]:
     return None
 
 
-def decode_payload(payload_str: str) -> Optional[PayloadInfo]:
+def decode_payload(payload_str: str) -> PayloadInfo | None:
     """Decode Base64 Payload -> PayloadInfo."""
     if not payload_str:
         return None
