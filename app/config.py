@@ -45,6 +45,7 @@ class BridgeConfig:
 
     # Persistence
     STATE_FILE: str = os.getenv("DDLNZB_STATE_FILE", "./ddlnzb_bridge_state.json")
+    DATA_DIR: str = os.getenv("DDLNZB_DATA_DIR", str(BASE_DIR / "data"))
 
     def __post_init__(self):
         if self.CATEGORY_MAPPING is None:
