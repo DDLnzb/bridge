@@ -17,7 +17,7 @@ from app.download_handler import download_handler
 from app.heartbeat import jd_heartbeat
 from app.jdownloader import jdownloader
 from app.persistence import queue_persistence
-from app.sabnzbd_api import download_queue
+from app.sabnzbd_api import QueueItem, download_queue
 from app.sabnzbd_api import router as sabnzbd_router
 
 logging.basicConfig(
@@ -68,7 +68,6 @@ async def lifespan(app: FastAPI):
     try:
         saved_jobs = queue_persistence.load()
         if saved_jobs:
-            from app.sabnzbd_api import QueueItem
             for job in saved_jobs:
                 if job.get("status") in ("Queued", "Downloading"):
                     nzo_id = job.get("id")
