@@ -14,8 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import config
 from app.download_handler import download_handler
+from app.heartbeat import jd_heartbeat
 from app.jdownloader import jdownloader
-from app.sabnzbd_api import router as sabnzbd_router
+from app.persistence import queue_persistence
+from app.sabnzbd_api import download_queue, router as sabnzbd_router
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -61,16 +63,52 @@ async def lifespan(app: FastAPI):
     else:
         print("JDownloader credentials not configured")
 
+    # Load persisted queue
+    try:
+        saved_jobs = queue_persistence.load()
+        if saved_jobs:
+            from app.sabnzbd_api import QueueItem
+            for job in saved_jobs:
+                if job.get("status") in ("Queued", "Downloading"):
+                    nzo_id = job.get("id")
+                    if nzo_id and nzo_id not in download_queue:
+                        item = QueueItem(
+                            nzo_id=nzo_id,
+                            filename=job.get("filename", ""),
+                            category=job.get("category", ""),
+                            payload=job.get("payload", ""),
+                        )
+                        item.status = "Queued"  # Reset to queued for retry
+                        item.links = job.get("links", [])
+                        download_queue[nzo_id] = item
+            logger.info("Restored %d pending jobs from persistence", len(download_queue))
+    except Exception as e:
+        logger.warning("Failed to load persisted queue: %s", e)
+
     # Start download handler loop
     try:
         await download_handler.start()
     except Exception as e:
         print(f"Failed to start download handler: {e}")
 
+    # Start JDownloader heartbeat
+    try:
+        await jd_heartbeat.start()
+    except Exception as e:
+        logger.warning("Failed to start JD heartbeat: %s", e)
+
     yield
 
     # Cleanup
+    await jd_heartbeat.stop()
     await download_handler.stop()
+
+    # Save queue state before shutdown
+    try:
+        queue_persistence.save(download_queue)
+    except Exception as e:
+        logger.warning("Failed to save queue on shutdown: %s", e)
+
     await jdownloader.disconnect()
     print("DDLnzb Bridge stopped")
 
@@ -110,6 +148,35 @@ async def root():
 async def health():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.get("/status")
+async def status():
+    """Detailed status endpoint."""
+    return {
+        "name": "DDLnzb Bridge",
+        "version": "1.0.0",
+        "jdownloader": {
+            "connected": jdownloader.device_id is not None,
+            "device_id": jdownloader.device_id,
+            "device_name": config.MYJD_DEVICE_NAME,
+        },
+        "heartbeat": jd_heartbeat.status,
+        "queue": {
+            "total": len(download_queue),
+            "active": sum(
+                1 for item in download_queue.values()
+                if getattr(item, "status", "") in ("Queued", "Downloading")
+            ),
+        },
+    }
+
+
+@app.post("/heartbeat/reconnect")
+async def force_reconnect():
+    """Force JDownloader reconnect."""
+    success = await jd_heartbeat.force_reconnect()
+    return {"success": success, "status": jd_heartbeat.status}
 
 
 def main():
