@@ -2,22 +2,43 @@
 # DDLnzb Bridge Dockerfile
 # ===========================
 
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
+
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
 # Install Poetry
-RUN pip install poetry==1.7.1
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install poetry==1.7.1
 
 # Copy dependency files
 COPY pyproject.toml poetry.lock* ./
 
 # Install dependencies
-RUN poetry config virtualenvs.create false \
+RUN --mount=type=cache,target=/root/.cache/pypoetry \
+    poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi --no-root --only main
 
+# ===========================
+# Production Image
+# ===========================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
 # Copy application code
-COPY . .
+COPY app ./app
+COPY src ./src
 
 # Create non-root user
 RUN useradd -m -u 1000 ddlnzb && chown -R ddlnzb:ddlnzb /app

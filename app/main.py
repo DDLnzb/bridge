@@ -17,7 +17,8 @@ from app.download_handler import download_handler
 from app.heartbeat import jd_heartbeat
 from app.jdownloader import jdownloader
 from app.persistence import queue_persistence
-from app.sabnzbd_api import download_queue, router as sabnzbd_router
+from app.sabnzbd_api import download_queue
+from app.sabnzbd_api import router as sabnzbd_router
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),

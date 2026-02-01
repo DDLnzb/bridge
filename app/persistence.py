@@ -88,7 +88,7 @@ class QueuePersistence:
             return []
 
         try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
+            with open(self.file_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             version = data.get("version", 0)
