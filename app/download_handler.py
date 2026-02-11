@@ -101,10 +101,7 @@ class DownloadHandler:
             logger.debug("Fetched %s links for %s", len(links), nzo_id)
 
             # Determine destination folder based on category
-            dest_folder = config.CATEGORY_MAPPING.get(
-                item.category,
-                config.DOWNLOAD_DIR
-            )
+            dest_folder = config.CATEGORY_MAPPING.get(item.category, config.DOWNLOAD_DIR)
 
             # Send to JDownloader
             if jdownloader.device_id:
@@ -136,7 +133,7 @@ class DownloadHandler:
         """Parse DDLnzb payload."""
         try:
             # Payload format: title|source|mirror|size|password|imdb_id
-            decoded = base64.urlsafe_b64decode(payload_str).decode('utf-8')
+            decoded = base64.urlsafe_b64decode(payload_str).decode("utf-8")
             parts = decoded.split("|")
 
             if len(parts) >= 6:
@@ -285,10 +282,7 @@ class DownloadHandler:
 
                         # Check if complete
                         if pkg.get("finished", False):
-                            complete_download(
-                                nzo_id,
-                                pkg.get("saveTo", config.DOWNLOAD_DIR)
-                            )
+                            complete_download(nzo_id, pkg.get("saveTo", config.DOWNLOAD_DIR))
                             return
 
                         break
