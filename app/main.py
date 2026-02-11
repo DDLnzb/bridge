@@ -165,7 +165,8 @@ async def status():
         "queue": {
             "total": len(download_queue),
             "active": sum(
-                1 for item in download_queue.values()
+                1
+                for item in download_queue.values()
                 if getattr(item, "status", "") in ("Queued", "Downloading")
             ),
         },
