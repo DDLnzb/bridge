@@ -80,7 +80,11 @@ def _load_state() -> None:
         for item in data.get("history", []):
             hi = _deserialize_history_item(item)
             download_history[hi.nzo_id] = hi
-        logger.info("Restored bridge state: %s queue items, %s history entries", len(download_queue), len(download_history))
+        logger.info(
+            "Restored bridge state: %s queue items, %s history entries",
+            len(download_queue),
+            len(download_history),
+        )
     except Exception as exc:
         logger.warning("Failed to load bridge state: %s", exc)
 
@@ -91,6 +95,7 @@ _load_state()
 @dataclass
 class QueueItem:
     """Item in der Download-Queue."""
+
     nzo_id: str
     filename: str
     category: str
@@ -111,6 +116,7 @@ class QueueItem:
 @dataclass
 class HistoryItem:
     """Item in der Download-Historie."""
+
     nzo_id: str
     name: str
     category: str
@@ -128,6 +134,7 @@ class HistoryItem:
 @dataclass
 class PayloadInfo:
     """Dekodierte Payload-Informationen."""
+
     title: str
     source_url: str
     mirror: str | None
@@ -240,53 +247,63 @@ def _get_queue(output: str):
     """Get current download queue."""
     slots = []
     for item in download_queue.values():
-        slots.append({
-            "nzo_id": item.nzo_id,
-            "filename": item.filename,
-            "cat": item.category,
-            "status": item.status,
-            "percentage": str(item.percentage),
-            "size": item.size,
-            "sizeleft": item.sizeleft,
-            "eta": item.eta,
-            "timeleft": item.timeleft,
-            "links": item.links,
-        })
+        slots.append(
+            {
+                "nzo_id": item.nzo_id,
+                "filename": item.filename,
+                "cat": item.category,
+                "status": item.status,
+                "percentage": str(item.percentage),
+                "size": item.size,
+                "sizeleft": item.sizeleft,
+                "eta": item.eta,
+                "timeleft": item.timeleft,
+                "links": item.links,
+            }
+        )
 
-    return _json_or_text({
-        "queue": {
-            "status": "Downloading" if slots else "Idle",
-            "speedlimit": "0",
-            "speed": "0 KB/s",
-            "sizeleft": "0 MB",
-            "timeleft": "0:00:00",
-            "noofslots": len(slots),
-            "slots": slots,
-        }
-    }, output)
+    return _json_or_text(
+        {
+            "queue": {
+                "status": "Downloading" if slots else "Idle",
+                "speedlimit": "0",
+                "speed": "0 KB/s",
+                "sizeleft": "0 MB",
+                "timeleft": "0:00:00",
+                "noofslots": len(slots),
+                "slots": slots,
+            }
+        },
+        output,
+    )
 
 
 def _get_history(output: str):
     """Get download history."""
     slots = []
     for item in list(download_history.values())[-50:]:  # Last 50 items
-        slots.append({
-            "nzo_id": item.nzo_id,
-            "name": item.name,
-            "category": item.category,
-            "status": item.status,
-            "size": item.size,
-            "completed": int(item.completed_at.timestamp()),
-            "storage": item.storage,
-            "links": item.links,
-        })
+        slots.append(
+            {
+                "nzo_id": item.nzo_id,
+                "name": item.name,
+                "category": item.category,
+                "status": item.status,
+                "size": item.size,
+                "completed": int(item.completed_at.timestamp()),
+                "storage": item.storage,
+                "links": item.links,
+            }
+        )
 
-    return _json_or_text({
-        "history": {
-            "noofslots": len(slots),
-            "slots": slots,
-        }
-    }, output)
+    return _json_or_text(
+        {
+            "history": {
+                "noofslots": len(slots),
+                "slots": slots,
+            }
+        },
+        output,
+    )
 
 
 def _get_fullstatus(output: str):
@@ -301,9 +318,7 @@ def _get_fullstatus(output: str):
         history_data = {"history": {"noofslots": 0, "slots": []}}
 
     payload = {
-        "status": {
-            "state": "Downloading" if queue_data.get("queue", {}).get("slots") else "Idle"
-        },
+        "status": {"state": "Downloading" if queue_data.get("queue", {}).get("slots") else "Idle"},
         "queue": queue_data.get("queue", {}),
         "history": history_data.get("history", {}),
     }
@@ -326,10 +341,13 @@ async def _add_url(url: str, nzbname: str, category: str, output: str):
 
     item = _enqueue_payload(payload, nzbname, category)
 
-    return _json_or_text({
-        "status": True,
-        "nzo_ids": [item.nzo_id],
-    }, output)
+    return _json_or_text(
+        {
+            "status": True,
+            "nzo_ids": [item.nzo_id],
+        },
+        output,
+    )
 
 
 async def _add_file(request: Request, nzbname: str, category: str, output: str):
@@ -344,10 +362,13 @@ async def _add_file(request: Request, nzbname: str, category: str, output: str):
 
     item = _enqueue_payload(payload, nzbname, category)
 
-    return _json_or_text({
-        "status": True,
-        "nzo_ids": [item.nzo_id],
-    }, output)
+    return _json_or_text(
+        {
+            "status": True,
+            "nzo_ids": [item.nzo_id],
+        },
+        output,
+    )
 
 
 def _delete_item(nzo_id: str, output: str):
@@ -384,18 +405,24 @@ def _get_links_response(nzo_id: str | None, output: str):
         return _error_response("nzo_id missing", output)
     if nzo_id in download_queue:
         item = download_queue[nzo_id]
-        return _json_or_text({
-            "status": "queue",
-            "nzo_id": nzo_id,
-            "links": item.links,
-        }, output)
+        return _json_or_text(
+            {
+                "status": "queue",
+                "nzo_id": nzo_id,
+                "links": item.links,
+            },
+            output,
+        )
     if nzo_id in download_history:
         item = download_history[nzo_id]
-        return _json_or_text({
-            "status": "history",
-            "nzo_id": nzo_id,
-            "links": item.links,
-        }, output)
+        return _json_or_text(
+            {
+                "status": "history",
+                "nzo_id": nzo_id,
+                "links": item.links,
+            },
+            output,
+        )
     return _error_response(f"nzo_id not found: {nzo_id}", output)
 
 
