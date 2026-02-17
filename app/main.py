@@ -6,17 +6,25 @@ Local bridge that acts as SABnzbd for *arr apps and sends downloads to JDownload
 
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import config
 from app.download_handler import download_handler
 from app.heartbeat import jd_heartbeat
 from app.jdownloader import jdownloader
+from app.metrics import (
+    bridge_http_request_duration_seconds,
+    bridge_http_requests_in_flight,
+    bridge_http_requests_total,
+    bridge_queue_depth,
+    metrics_payload,
+)
 from app.persistence import queue_persistence
 from app.sabnzbd_api import QueueItem, download_queue
 from app.sabnzbd_api import router as sabnzbd_router
@@ -130,6 +138,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def prometheus_metrics(request: Request, call_next):
+    service = "bridge"
+    endpoint = request.url.path
+    method = request.method
+    start_time = time.perf_counter()
+
+    bridge_http_requests_in_flight.labels(service=service).inc()
+    try:
+        response = await call_next(request)
+        status_code = str(response.status_code)
+        duration = time.perf_counter() - start_time
+        bridge_http_requests_total.labels(
+            method=method,
+            endpoint=endpoint,
+            status_code=status_code,
+            service=service,
+        ).inc()
+        bridge_http_request_duration_seconds.labels(
+            method=method,
+            endpoint=endpoint,
+            service=service,
+        ).observe(duration)
+        return response
+    except Exception:
+        duration = time.perf_counter() - start_time
+        bridge_http_requests_total.labels(
+            method=method,
+            endpoint=endpoint,
+            status_code="500",
+            service=service,
+        ).inc()
+        bridge_http_request_duration_seconds.labels(
+            method=method,
+            endpoint=endpoint,
+            service=service,
+        ).observe(duration)
+        raise
+    finally:
+        bridge_http_requests_in_flight.labels(service=service).dec()
+
+
 # Include SABnzbd-compatible API
 app.include_router(sabnzbd_router)
 
@@ -137,15 +187,26 @@ app.include_router(sabnzbd_router)
 async def require_bridge_key(
     x_api_key: str | None = Header(None, alias="X-API-Key"),
     apikey: str | None = Query(None),
+    authorization: str | None = Header(None),
 ) -> None:
     """Bridge-Key-Prüfung für alle Routen außer `/health`.
 
     Deckt sich mit der Prüfung in `sabnzbd_api.py` und schließt bei fehlender
     Konfiguration: ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig. Sonst
     ließe sich ein Bridge ohne Key durch die Hintertür abschalten.
+
+    Drei Wege werden akzeptiert:
+    - `X-API-Key: <key>` (Header) — der Weg der *arr-Apps und des Backends
+    - `?apikey=<key>` (Query) — SABnzbd-Kompatibilität
+    - `Authorization: Bearer <key>` — Prometheus kann nur einen Bearer-Token
+      mitschicken (`bearer_token_file`), keine freien Header. Ohne diesen Weg
+      wäre ein geschütztes `/metrics` nicht abfragbar.
     """
-    presented = x_api_key or apikey or ""
-    if not config.DDLNZB_API_KEY or not secrets.compare_digest(presented, config.DDLNZB_API_KEY):
+    bearer = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization[7:].strip()
+    presented = x_api_key or apikey or bearer
+    if not config.DDLNZB_API_KEY or not secrets.compare_digest(presented or "", config.DDLNZB_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
@@ -170,8 +231,28 @@ async def health():
     return {"status": "healthy"}
 
 
-@app.get("/status", dependencies=[Depends(require_bridge_key)])
-async def status():
+@app.get("/metrics", dependencies=[Depends(require_bridge_key)])
+async def metrics() -> Response:
+    """Prometheus metrics endpoint.
+
+    Geschuetzt wie `/status`: der Bridge-Port 6789 ist im Prod-Compose
+    veroeffentlicht, und die Metriken verraten Queue-Tiefe und
+    Request-Muster. Prometheus liefert den Key als Bearer-Token
+    (`bearer_token_file` in `monitoring/prometheus/prometheus.yml`).
+    """
+    queued = sum(1 for item in download_queue.values() if getattr(item, "status", "") == "Queued")
+    downloading = sum(
+        1 for item in download_queue.values() if getattr(item, "status", "") == "Downloading"
+    )
+    bridge_queue_depth.labels(state="total").set(len(download_queue))
+    bridge_queue_depth.labels(state="queued").set(queued)
+    bridge_queue_depth.labels(state="downloading").set(downloading)
+
+    payload, content_type = metrics_payload()
+    return Response(content=payload, media_type=content_type)
+
+
+@app.get("/status", dependencies=[Depends(require_bridge_key)])async def status():
     """Detailed status endpoint."""
     return {
         "name": "DDLnzb Bridge",
