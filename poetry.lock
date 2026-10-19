@@ -479,14 +479,14 @@ files = [
 
 [[package]]
 name = "myjdapi"
-version = "1.1.10"
+version = "1.1.11"
 description = "Library to use My.Jdownloader API in an easy way."
 optional = false
 python-versions = "*"
 groups = ["main"]
 files = [
-    {file = "myjdapi-1.1.10-py3-none-any.whl", hash = "sha256:4713978e9abcc5041d4499a36195889b9f5c10cb8a35b2ab898588009f9f2327"},
-    {file = "myjdapi-1.1.10.tar.gz", hash = "sha256:3815f4441dabc6f7f35dc163ce87fa26bfc98614912618a818cede873dd3f19d"},
+    {file = "myjdapi-1.1.11-py3-none-any.whl", hash = "sha256:274ec77461432da21b6d615d5fdc011e47ced24f40e8121f2ca84b21be4aaecd"},
+    {file = "myjdapi-1.1.11.tar.gz", hash = "sha256:14e9d4b2f5bf1e50a6be4de3ef5b18394847254cb045816d7f00dd8b2458c748"},
 ]
 
 [package.dependencies]
