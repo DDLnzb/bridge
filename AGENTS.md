@@ -91,7 +91,7 @@ python -c "import app.sabnzbd_api as m; print(m.__file__)"
 
 Der Pfad muss im Working Tree liegen.
 
-`requirements.txt` ist veraltet (enthält `pycryptodome`, das im Code nicht verwendet wird, und lässt `myjdapi` sowie `pydantic-settings` weg). Das Dockerfile nutzt `poetry install`, nicht `requirements.txt` — die Datei ist tot und irreführend.
+`pyproject.toml` und `poetry.lock` sind die einzige Abhängigkeitsquelle der Bridge. Ein `requirements.txt` gab es bis 2026-10-19, wurde von keinem Build-Pfad gelesen und wich vom Lockfile ab; es ist entfernt. **Keine zweite Deklaration anlegen** — Dependabot würde beide scannen und doppelte PRs erzeugen, von denen nur einer die installierte Version ändert.
 
 ## Child DOX Index
 
