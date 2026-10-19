@@ -27,7 +27,13 @@ Das ist der wichtigste Punkt in diesem Verzeichnis.
 
 Beide Configs sind **disjunkt** — dieselbe Umgebungsvariable wirkt nicht auf beide.
 
-⚠️ Das `CMD` im Dockerfile lautet `uvicorn src.main:app --host 0.0.0.0 --port 6789` und zeigt damit auf den **Stub**. Das in `docker-compose.prod.yml` referenzierte Image `ghcr.io/weedo078/ddlnzb-bridge` dürfte damit auf `src/` laufen, während `README.md` und `.env.example` die `app/`-Variante beschreiben. Bevor in einem dieser Pfade etwas „repariert" wird, klären, welcher Pfad tatsächlich produktiv ist.
+**`app/` ist der produktive Pfad.** Das `CMD` im Dockerfile zeigt auf `uvicorn app.main:app` und damit auf `app/`. Belege dafür, dass das die gewollte Zielrichtung ist:
+
+- `bridge/.env` und `bridge/.env.example` pflegen ausschließlich `app/`-Variablen (`MYJD_*`, `DDLNZB_API_KEY`). Keine einzige `src/`-Variable ist dort gesetzt.
+- `README.md` startet lokal mit `poetry run uvicorn app.main:app`.
+- Alle gemeldeten Bridge-Defekte betreffen `app/`-Dateien.
+
+`src/` bleibt erhalten, wird aber nicht gestartet. Ob `src/` ganz entfällt, ist weiterhin offen — das ist eine eigene Entscheidung und nicht Teil der CMD-Korrektur. `Dockerfile` kopiert beide Verzeichnisse (`COPY app ./app`, `COPY src ./src`); das ist Absicht, damit der Stub nicht unbeabsichtigt mitverschwindet.
 
 ### Aufrufrichtung ist einseitig
 
@@ -39,13 +45,13 @@ Konsequenz für das Deployment: der Bridge-Host muss die API erreichen können. 
 
 Der Bridge ruft `GET {DDLNZB_API_URL}/api/v1/links/{release_id}` mit Header `X-API-Key`. Jeder Aufruf zählt gegen das **tägliche Download-Limit** des User-Tiers. Der Bridge darf deshalb nicht aggressiv pollen.
 
-Der `by-source`-Pfad in `download_handler.py` (mit `source_url`/`hoster`-Param) existiert im Backend **nicht** — er ist toter Code.
+Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert — sie stammt aus einem Base64-Payload und wird ungeprüft interpoliert.
 
 ### Payload-Format
 
 Das Backend erzeugt in `../backend/app/scrapers/utils/payload.py` einen base64url-kodierten String:
 
-```
+```text
 title|source|mirror|size_mb|password|imdb_id
 ```
 
@@ -68,10 +74,22 @@ Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` ver�
 
 ```bash
 cd bridge && poetry run ruff check .
-poetry run pytest -v
+poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Es existiert **keine** echte Testabdeckung — die CI-Jobs für den Bridge führen nur Lint aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Für alles andere — JDownloader-Verbindung, Heartbeat, `queue_persistence` — gibt es weiterhin keine Tests. Die CI-Jobs für den Bridge führen nur Lint aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+
+`tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
+
+⚠️ **Nicht jeden Test darf `fresh_import()` benutzen.** `download_handler._monitor_jdownloader()` greift über eine Modul-Referenz auf `download_queue` zu. `fresh_import()` erzeugt ein neues Dict, das der Handler nicht sieht — der Eintrag fehlt, die Schleife kehrt sofort zurück und der Test wäre stillschweigend grün. Solche Tests befüllen `app.sabnzbd_api.download_queue` direkt und prüfen anschließend, dass `get_packages` wirklich aufgerufen wurde.
+
+Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absolut als `from app.…` importiert werden. **Dabei `python -m pytest` verwenden, nicht das `pytest`-Skript.** Das Skript legt das aktuelle Verzeichnis nicht auf `sys.path`; legt es eine alte Installation hinein (z. B. eine `.pth`-Datei eines früheren `poetry install` auf ein fremdes Verzeichnis), importiert pytest `app.*` von dort statt aus dem Working Tree. Das trifft Tests stillschweigend falsch — sie laufen gegen einen anderen Stand und schlagen dann für Gründe fehl, die im Working Tree nicht existieren. Gegenprobe bei Verdacht:
+
+```bash
+python -c "import app.sabnzbd_api as m; print(m.__file__)"
+```
+
+Der Pfad muss im Working Tree liegen.
 
 `requirements.txt` ist veraltet (enthält `pycryptodome`, das im Code nicht verwendet wird, und lässt `myjdapi` sowie `pydantic-settings` weg). Das Dockerfile nutzt `poetry install`, nicht `requirements.txt` — die Datei ist tot und irreführend.
 
@@ -81,4 +99,4 @@ poetry run pytest -v
 | --- | --- |
 | [`app/AGENTS.md`](app/AGENTS.md) | Produktive Implementierung mit SABnzbd-API und JDownloader |
 
-`src/` ist bewusst **ohne** eigenes Doc: Es ist ein Stub mit abweichendem Config-Vertrag, und die Entscheidung, ob er entfernt oder produktiv gemacht wird, ist offen. Der Widerspruch ist in diesem Doc festgehalten.
+`src/` ist bewusst **ohne** eigenes Doc: Es ist ein Stub mit abweichendem Config-Vertrag und wird vom Image nicht gestartet. Ob er entfernt wird, ist offen.
