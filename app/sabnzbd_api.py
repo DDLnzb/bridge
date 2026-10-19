@@ -89,9 +89,6 @@ def _load_state() -> None:
         logger.warning("Failed to load bridge state: %s", exc)
 
 
-_load_state()
-
-
 @dataclass
 class QueueItem:
     """Item in der Download-Queue."""
@@ -129,6 +126,13 @@ class HistoryItem:
     release_id: str | None = None
     payload: str | None = None
     links: list[str] = field(default_factory=list)
+
+
+# Muss nach QueueItem und HistoryItem stehen: _deserialize_queue_item und
+# _deserialize_history_item erzeugen Instanzen dieser beiden Klassen. Ein früherer
+# Aufruf läuft in einen NameError, der vom except-Handler in _load_state()
+# geschluckt wird - die Queue wäre dann stillschweigend leer.
+_load_state()
 
 
 @dataclass
