@@ -22,11 +22,36 @@ Neue Modi hier ergänzen, nicht als eigene Route danebenlegen — sonst verstehe
 
 ### API-Key-Prüfung
 
-Der Endpunkt vergleicht den Query-Param `apikey` mit `config.DDLNZB_API_KEY` und liefert bei Abweichung `{"status": false, "error": "Invalid API key"}`. `mode=auth` gibt `{"auth": "ok"}` zurück — es wird **kein** Key-Hash verglichen, nur Gleichheit.
+Es gibt **zwei** getrennte Prüfungen, beide gegen `config.DDLNZB_API_KEY`:
+
+| Ort | Form | Verhalten bei Abweichung |
+| --- | --- | --- |
+| `sabnzbd_api.py`, Dispatch am `/api`-Endpunkt | Query-Param `apikey` | `{"status": false, "error": "Invalid API key"}` |
+| `main.py`, Dependency `require_bridge_key` | Header `X-API-Key` **oder** Query-Param `apikey` | `HTTPException(401, "Invalid API key")` |
+
+`require_bridge_key` hängt an `@app.get("/")`, `@app.get("/status")` und `@app.post("/heartbeat/reconnect")`. **Neue Routen in `main.py` brauchen diese Dependency ausdrücklich** — FastAPI schützt nichts automatisch. `/health` ist die einzige bewusst offene Route: Docker-HEALTHCHECK und Load-Balancer müssen sie ohne Zugangsdaten erreichen.
+
+Zwei Eigenschaften, die bei Änderungen nicht verloren gehen dürfen:
+
+- **Leere Konfiguration schließt.** Ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig (`not config.DDLNZB_API_KEY or ...`). Andernfalls ließe sich eine Bridge ohne Key abschalten.
+- **`secrets.compare_digest`, nicht `==`.** Zeitkonstanter Vergleich.
+
+`mode=auth` gibt `{"auth": "ok"}` zurück — es wird **kein** Key-Hash verglichen, nur Gleichheit.
 
 ### Fehlende Konfiguration ist kein Abbruch
 
-Fehlt `DDLNZB_API_KEY`, loggt der Lifespan nur `logger.warning("DDLnzb API key not configured")` und startet weiter. Das ist als offener Punkt in `../plan/BRIDGE_COMPLETION_PLAN.md` (AP1) dokumentiert. Wer das zum Fail-Fast ändert, löst damit auch die offene Aufgabe auf — das ist eine bewusste Entscheidung, kein Bugfix.
+Fehlt `DDLNZB_API_KEY`, loggt der Lifespan nur `logger.warning("DDLnzb API key not configured")` und startet weiter. Der Prozess startet also, ist aber funktional unbrauchbar: `/api` und alle Routen außer `/health` lehnen jeden Aufruf ab. Das ist als offener Punkt in `../plan/BRIDGE_COMPLETION_PLAN.md` (AP1) dokumentiert. Wer das zum Fail-Fast ändert, löst damit auch die offene Aufgabe auf — das ist eine bewusste Entscheidung, kein Bugfix.
+
+### Ein Übergangspunkt Queue → Historie
+
+`_move_to_history()` in `sabnzbd_api.py` ist der **einzige** Weg, auf dem ein Eintrag aus `download_queue` nach `download_history` wandert. `complete_download()`, `fail_download()` und `mark_manual_download()` sind dünne Wrapper darum.
+
+Zwei Eigenschaften stecken bewusst darin:
+
+- **Persistieren.** Vor der Zusammenführung haben die drei Aufrufstellen es unterschiedlich gemacht — `fail_download` und `mark_manual_download` haben ihren Eintrag bei jedem Neustart verloren. Neuer Übergang: `_move_to_history` aufrufen, nicht von Hand in beide Dicts schreiben.
+- **Links mitnehmen.** `links=item.links` geht in die `HistoryItem`. Ohne sie kann `mode=retry` den Auftrag nicht wieder einreihen.
+
+`mode=retry` weist Einträge mit `status == "Completed"` ab: das Paket existiert im JDownloader-Entpackungsordner nicht mehr.
 
 ### CORS ist unsicher konfiguriert
 
@@ -42,13 +67,38 @@ Fehlt `DDLNZB_API_KEY`, loggt der Lifespan nur `logger.warning("DDLnzb API key n
 
 `_fetch_links_from_cloud()` fängt `httpx.RequestError` ab, um den Retry nicht zu brechen. Unerwartete Fehler brechen den Retry ab. Bei Änderungen beides im Blick behalten — zu breites Fangen verdeckt Fehler, zu schmales verschwendet Wiederholungen.
 
+Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert. Sie stammt aus einem Base64-Payload und wird ungeprüft in `GET /api/v1/links/{release_id}` interpoliert. Der frühere `by-source`-Zweig (mit `source_url`/`hoster`-Param) ist entfernt — im Backend existiert dieser Pfad nicht, siehe `../AGENTS.md`.
+
+### Division im Fortschritt
+
+`_monitor_jdownloader()` rechnet `(bytesLoaded / bytesTotal) * 100`. JDownloader meldet `bytesTotal: 0`, solange die Gesamtgröße des Pakets nicht feststeht — der Wert ist also **normal**, nicht nur ein Ausnahmefall. Ohne den `if bytes_total > 0`-Schutz entsteht eine `ZeroDivisionError`, die vom breiten `except Exception` unten im Loop geschluckt wird; anschließend schläft der Handler `idle_interval` (300s) und verliert den Fortschritt für fünf Minuten.
+
 ## Verification
 
 ```bash
 cd bridge && poetry run ruff check app/
+poetry run python -m pytest tests/ -q
 ```
 
-Für echte Verbindungsdiagnose: `jd_test.py` (manueller JDownloader-Connect-Smoke, ruft `asyncio.run()` beim Import auf — nicht pytest-fähig). Automatisierte Tests existieren nicht; siehe Parent-Doc.
+⚠️ **`python -m pytest`, nicht das `pytest`-Skript** — siehe die sys.path-Falle im Parent-Doc. Gegenprobe:
+
+```bash
+python -c "import app.sabnzbd_api as m; print(m.__file__)"
+```
+
+Für echte Verbindungsdiagnose: `jd_test.py` (manueller JDownloader-Connect-Smoke, ruft `asyncio.run()` beim Import auf — nicht pytest-fähig).
+
+Abgedeckt von `tests/`:
+
+| Datei | Bereich |
+| --- | --- |
+| `test_bridge_auth.py` | `require_bridge_key`: alle Routen außer `/health` |
+| `test_queue_transitions.py` | `_move_to_history`, Persistenz über Neustart, `mode=retry` |
+| `test_cloud_links.py` | URL-Bildung aus `release_id`, Fortschrittsberechnung |
+| `test_state_restore.py` | State-Restore über Modulimport, Roundtrip |
+| `test_smoke.py` | Platzhalter (`assert True`) |
+
+Weiterhin **ohne** Tests: JDownloader-Verbindung, Heartbeat, `queue_persistence`.
 
 ## Child DOX Index
 

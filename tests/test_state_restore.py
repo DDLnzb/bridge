@@ -9,28 +9,10 @@ Der Test schreibt eine State-Datei, importiert das Modul neu und prueft, dass
 der Zustand tatsaechlich ankommt. Kein Quelltext-Assert.
 """
 
-import importlib
 import json
-import sys
-
-import pytest
 
 
-def _fresh_import(state_file):
-    """Importiert app.sabnzbd_api neu, damit STATE_PATH aus der Env neu gelesen wird."""
-    for module in ("app.sabnzbd_api", "app.config"):
-        sys.modules.pop(module, None)
-    return importlib.import_module("app.sabnzbd_api")
-
-
-@pytest.fixture
-def state_file(tmp_path, monkeypatch):
-    path = tmp_path / "bridge_state.json"
-    monkeypatch.setenv("DDLNZB_STATE_FILE", str(path))
-    return path
-
-
-def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file):
+def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file, fresh_import):
     state_file.write_text(
         json.dumps(
             {
@@ -70,7 +52,7 @@ def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file):
         encoding="utf-8",
     )
 
-    module = _fresh_import(state_file)
+    module = fresh_import()
 
     assert "nzo-restored-1" in module.download_queue, (
         "Queue wurde nicht wiederhergestellt - der State-Import läuft vermutlich "
@@ -88,26 +70,26 @@ def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file):
     assert restored_history_item.storage == "/downloads"
 
 
-def test_fehlende_state_datei_bricht_den_import_nicht(state_file):
+def test_fehlende_state_datei_bricht_den_import_nicht(state_file, fresh_import):
     assert not state_file.exists()
 
-    module = _fresh_import(state_file)
+    module = fresh_import()
 
     assert module.download_queue == {}
     assert module.download_history == {}
 
 
-def test_kaputte_state_datei_wird_gefangen(state_file):
+def test_kaputte_state_datei_wird_gefangen(state_file, fresh_import):
     state_file.write_text("{kein gueltiges json", encoding="utf-8")
 
-    module = _fresh_import(state_file)
+    module = fresh_import()
 
     assert module.download_queue == {}
     assert module.download_history == {}
 
 
-def test_persist_roundtrip_erhaelt_die_felder(state_file):
-    module = _fresh_import(state_file)
+def test_persist_roundtrip_erhaelt_die_felder(state_file, fresh_import):
+    module = fresh_import()
 
     module.download_queue["nzo-1"] = module.QueueItem(
         nzo_id="nzo-1",
@@ -124,7 +106,7 @@ def test_persist_roundtrip_erhaelt_die_felder(state_file):
     )
     module._persist_state()
 
-    reloaded = _fresh_import(state_file)
+    reloaded = fresh_import()
 
     assert reloaded.download_queue["nzo-1"].links == [
         "https://example.invalid/a.bin",

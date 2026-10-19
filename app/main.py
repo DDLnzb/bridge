@@ -5,11 +5,12 @@ Local bridge that acts as SABnzbd for *arr apps and sends downloads to JDownload
 """
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import config
@@ -133,7 +134,22 @@ app.add_middleware(
 app.include_router(sabnzbd_router)
 
 
-@app.get("/")
+async def require_bridge_key(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+    apikey: str | None = Query(None),
+) -> None:
+    """Bridge-Key-Prüfung für alle Routen außer `/health`.
+
+    Deckt sich mit der Prüfung in `sabnzbd_api.py` und schließt bei fehlender
+    Konfiguration: ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig. Sonst
+    ließe sich ein Bridge ohne Key durch die Hintertür abschalten.
+    """
+    presented = x_api_key or apikey or ""
+    if not config.DDLNZB_API_KEY or not secrets.compare_digest(presented, config.DDLNZB_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+@app.get("/", dependencies=[Depends(require_bridge_key)])
 async def root():
     """Root endpoint."""
     return {
@@ -146,11 +162,15 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    Bewusst ohne Auth: Load-Balancer und Docker-HEALTHCHECK müssen den Endpunkt
+    ohne Zugangsdaten erreichen können. Hier steht auch nichts außer `status`.
+    """
     return {"status": "healthy"}
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_bridge_key)])
 async def status():
     """Detailed status endpoint."""
     return {
@@ -173,7 +193,7 @@ async def status():
     }
 
 
-@app.post("/heartbeat/reconnect")
+@app.post("/heartbeat/reconnect", dependencies=[Depends(require_bridge_key)])
 async def force_reconnect():
     """Force JDownloader reconnect."""
     success = await jd_heartbeat.force_reconnect()

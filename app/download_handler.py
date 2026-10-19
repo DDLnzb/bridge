@@ -7,6 +7,7 @@ Handles the download flow: fetch links from cloud, send to JDownloader.
 import asyncio
 import base64
 import logging
+from urllib.parse import quote
 
 import httpx
 
@@ -74,12 +75,16 @@ class DownloadHandler:
                 logger.warning("Invalid payload for %s", nzo_id)
                 return
 
-            title, source_url, mirror, size, password, imdb_id = release_info
+            # Feld 1 des Payloads heißt im Backend `source`, enthält aber
+            # str(release.id) - also die Release-UUID, keine Portal-URL.
+            # Der frühere Local hieß `source_url` und trieb die Verwechslung
+            # in #374 an; der eindeutige Name gehört hierher.
+            title, release_id, mirror, size, password, imdb_id = release_info
             if size and size > 0:
                 size_mb = f"{size / (1024 * 1024):.2f} MB"
                 item.size = size_mb
                 item.sizeleft = size_mb
-            item.release_id = source_url
+            item.release_id = release_id
             logger.debug(
                 "Parsed payload for %s: title=%s mirror=%s size=%s",
                 nzo_id,
@@ -91,7 +96,7 @@ class DownloadHandler:
             update_progress(nzo_id, 10, "Getting download links...")
 
             # Fetch actual download links from DDLnzb Cloud
-            links = await self._fetch_links_from_cloud(source_url, mirror, item.release_id)
+            links = await self._fetch_links_from_cloud(item.release_id)
             if not links:
                 fail_download(nzo_id, "No links available")
                 logger.warning("No links available for %s (%s)", nzo_id, title)
@@ -159,21 +164,23 @@ class DownloadHandler:
 
     async def _fetch_links_from_cloud(
         self,
-        source_url: str,
-        mirror: str | None = None,
-        release_id: str | None = None,
+        release_id: str | None,
         max_retries: int = 3,
     ) -> list[str]:
-        """Fetch download links from DDLnzb Cloud API with retries."""
+        """Fetch download links from DDLnzb Cloud API with retries.
+
+        `release_id` ist die Release-UUID. Das Backend kennt ausschließlich
+        `GET /api/v1/links/{release_id}` - einen `by-source`-Pfad gibt es
+        nicht, der frühere Mirror-Filter war toter Code.
+        """
+        if not release_id:
+            logger.error("Payload enthält keine Release-ID - Cloud-Abruf übersprungen")
+            return []
+
         backoff = 1
-        endpoint = "by-source"
-        params: dict[str, str] = {}
-        if release_id:
-            endpoint = release_id
-        else:
-            params["source_url"] = source_url
-            if mirror and mirror != "*":
-                params["hoster"] = mirror
+        # Pfadsegment kodieren: die ID kommt aus einem Base64-Payload und wird
+        # ungeprüft in den Pfad interpoliert.
+        endpoint = quote(release_id, safe="")
 
         headers = {}
         if config.DDLNZB_API_KEY:
@@ -185,9 +192,8 @@ class DownloadHandler:
             endpoint,
         )
         logger.debug(
-            "DDLnzb API request details: url=%s params=%s api_key_configured=%s",
+            "DDLnzb API request details: url=%s api_key_configured=%s",
             f"{config.DDLNZB_API_URL}/api/v1/links/{endpoint}",
-            params or None,
             bool(config.DDLNZB_API_KEY),
         )
 
@@ -197,7 +203,6 @@ class DownloadHandler:
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         url,
-                        params=params or None,
                         headers=headers,
                         timeout=30,
                     )
@@ -209,42 +214,42 @@ class DownloadHandler:
                         logger.info(
                             "DDLnzb API returned %s links for %s",
                             len(links),
-                            release_id or source_url,
+                            release_id,
                         )
                         logger.debug(
                             "Received %s links from cloud (release=%s attempt=%s)",
                             len(links),
-                            release_id or source_url,
+                            release_id,
                             attempt,
                         )
                         return links
                     logger.warning(
                         "Cloud returned no links for release %s",
-                        release_id or source_url,
+                        release_id,
                     )
                     return []
                 elif response.status_code in (404, 410):
-                    logger.warning("Release not found for %s", release_id or source_url)
+                    logger.warning("Release not found for %s", release_id)
                     return []
                 else:
                     logger.error(
                         "Cloud error %s for %s: %s",
                         response.status_code,
-                        release_id or source_url,
+                        release_id,
                         response.text,
                     )
             except httpx.RequestError as e:
                 logger.warning(
                     "Cloud request failed (attempt %s) for %s: %s",
                     attempt,
-                    release_id or source_url,
+                    release_id,
                     e,
                 )
             except Exception as e:
                 logger.exception(
                     "Unexpected cloud error (attempt %s) for %s: %s",
                     attempt,
-                    release_id or source_url,
+                    release_id,
                     e,
                 )
             await asyncio.sleep(backoff)
@@ -273,10 +278,16 @@ class DownloadHandler:
                 for pkg in packages or []:
                     if package_name.lower() in pkg.get("name", "").lower():
                         matched = True
-                        # Calculate progress
-                        bytes_loaded = pkg.get("bytesLoaded", 0)
-                        bytes_total = pkg.get("bytesTotal", 1)
-                        progress = int((bytes_loaded / bytes_total) * 100)
+                        # Calculate progress. JDownloader meldet bytesTotal = 0,
+                        # solange die Gesamtgröße des Pakets nicht feststeht -
+                        # dann bleibt der Fortschritt bei 0, statt durch Null zu
+                        # teilen und den Monitoring-Loop zu unterbrechen.
+                        bytes_loaded = pkg.get("bytesLoaded") or 0
+                        bytes_total = pkg.get("bytesTotal") or 0
+                        if bytes_total > 0:
+                            progress = min(100, max(0, int((bytes_loaded / bytes_total) * 100)))
+                        else:
+                            progress = 0
 
                         update_progress(nzo_id, 20 + int(progress * 0.8), "Downloading...")
 

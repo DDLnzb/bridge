@@ -45,13 +45,13 @@ Konsequenz für das Deployment: der Bridge-Host muss die API erreichen können. 
 
 Der Bridge ruft `GET {DDLNZB_API_URL}/api/v1/links/{release_id}` mit Header `X-API-Key`. Jeder Aufruf zählt gegen das **tägliche Download-Limit** des User-Tiers. Der Bridge darf deshalb nicht aggressiv pollen.
 
-Der `by-source`-Pfad in `download_handler.py` (mit `source_url`/`hoster`-Param) existiert im Backend **nicht** — er ist toter Code.
+Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert — sie stammt aus einem Base64-Payload und wird ungeprüft interpoliert.
 
 ### Payload-Format
 
 Das Backend erzeugt in `../backend/app/scrapers/utils/payload.py` einen base64url-kodierten String:
 
-```
+```text
 title|source|mirror|size_mb|password|imdb_id
 ```
 
@@ -74,10 +74,14 @@ Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` ver�
 
 ```bash
 cd bridge && poetry run ruff check .
-poetry run pytest -v
+poetry run python -m pytest tests/ -v
 ```
 
-⚠️ Die Testabdeckung ist weiterhin dünn. `tests/test_smoke.py` ist ein Platzhalter (`assert True`); `tests/test_state_restore.py` deckt den Queue-/Historie-Restore über Import hinweg ab. Für alles andere — JDownloader-Anbindung, Cloud-Link-Fetch, Hintergrund-Tasks — gibt es weiterhin keine Tests. Die CI-Jobs für den Bridge führen nur Lint aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Für alles andere — JDownloader-Verbindung, Heartbeat, `queue_persistence` — gibt es weiterhin keine Tests. Die CI-Jobs für den Bridge führen nur Lint aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+
+`tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
+
+⚠️ **Nicht jeden Test darf `fresh_import()` benutzen.** `download_handler._monitor_jdownloader()` greift über eine Modul-Referenz auf `download_queue` zu. `fresh_import()` erzeugt ein neues Dict, das der Handler nicht sieht — der Eintrag fehlt, die Schleife kehrt sofort zurück und der Test wäre stillschweigend grün. Solche Tests befüllen `app.sabnzbd_api.download_queue` direkt und prüfen anschließend, dass `get_packages` wirklich aufgerufen wurde.
 
 Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absolut als `from app.…` importiert werden. **Dabei `python -m pytest` verwenden, nicht das `pytest`-Skript.** Das Skript legt das aktuelle Verzeichnis nicht auf `sys.path`; legt es eine alte Installation hinein (z. B. eine `.pth`-Datei eines früheren `poetry install` auf ein fremdes Verzeichnis), importiert pytest `app.*` von dort statt aus dem Working Tree. Das trifft Tests stillschweigend falsch — sie laufen gegen einen anderen Stand und schlagen dann für Gründe fehl, die im Working Tree nicht existieren. Gegenprobe bei Verdacht:
 
@@ -85,7 +89,7 @@ Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absol
 python -c "import app.sabnzbd_api as m; print(m.__file__)"
 ```
 
-Der Pfad muss im Working Tree liegen. Wer den State-Pfad im Test braucht, setzt `DDLNZB_STATE_FILE` **vor** dem Import und lädt `app.config` und `app.sabnzbd_api` neu — `STATE_PATH` wird beim Modulimport aus der Config gebildet und sonst nicht neu gelesen.
+Der Pfad muss im Working Tree liegen.
 
 `requirements.txt` ist veraltet (enthält `pycryptodome`, das im Code nicht verwendet wird, und lässt `myjdapi` sowie `pydantic-settings` weg). Das Dockerfile nutzt `poetry install`, nicht `requirements.txt` — die Datei ist tot und irreführend.
 
