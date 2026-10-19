@@ -388,13 +388,22 @@ def _retry_item(nzo_id: str, output: str):
     """Download erneut versuchen."""
     if nzo_id in download_history:
         item = download_history[nzo_id]
-        # Zurück in die Queue schieben
+        # Abgeschlossene Downloads dürfen nicht neu eingereiht werden: das Paket
+        # existiert im JDownloader-Entpackungsordner nicht mehr, der Wiederholungs-
+        # versuch würde fehlschlagen oder eine zweite Datei erzeugen.
+        if item.status == "Completed":
+            return _error_response(f"Item already completed: {nzo_id}", output)
+        # Zurück in die Queue schieben. Links, Größe und sizeleft mitnehmen -
+        # ein Retry ohne Linkliste startet den Auftrag ohne nutzbare Quelle.
         queue_item = QueueItem(
             nzo_id=item.nzo_id,
             filename=item.name,
             category=item.category,
+            size=item.size,
+            sizeleft=item.size,
             release_id=item.release_id,
             payload=item.payload,
+            links=list(item.links),
         )
         download_queue[nzo_id] = queue_item
         del download_history[nzo_id]
@@ -431,41 +440,41 @@ def _get_links_response(nzo_id: str | None, output: str):
 
 
 # Helper functions for queue management
+def _move_to_history(item: QueueItem, *, status: str, storage: str = "") -> HistoryItem:
+    """Queue-Eintrag in die Historie verschieben und den Zustand persistieren.
+
+    Einziger Übergangspunkt von `download_queue` nach `download_history`. Das
+    Persistieren steckt hier bewusst drin: drei getrennte Aufrufstellen haben
+    es bisher unterschiedlich gemacht, wodurch `fail_download` und
+    `mark_manual_download` ihren Eintrag bei jedem Neustart verloren haben.
+    """
+    history_item = HistoryItem(
+        nzo_id=item.nzo_id,
+        name=item.filename,
+        category=item.category,
+        status=status,
+        size=item.size,
+        storage=storage,
+        release_id=item.release_id,
+        payload=item.payload,
+        links=item.links,
+    )
+    download_history[item.nzo_id] = history_item
+    del download_queue[item.nzo_id]
+    _persist_state()
+    return history_item
+
+
 def complete_download(nzo_id: str, storage_path: str):
     """Download abschließen und in History verschieben."""
     if nzo_id in download_queue:
-        item = download_queue[nzo_id]
-        history_item = HistoryItem(
-            nzo_id=item.nzo_id,
-            name=item.filename,
-            category=item.category,
-            status="Completed",
-            size=item.size,
-            storage=storage_path,
-            release_id=item.release_id,
-            payload=item.payload,
-        )
-        download_history[nzo_id] = history_item
-        del download_queue[nzo_id]
-        _persist_state()
+        _move_to_history(download_queue[nzo_id], status="Completed", storage=storage_path)
 
 
 def fail_download(nzo_id: str, error: str):
     """Download als fehlgeschlagen markieren."""
     if nzo_id in download_queue:
-        item = download_queue[nzo_id]
-        history_item = HistoryItem(
-            nzo_id=item.nzo_id,
-            name=item.filename,
-            category=item.category,
-            status=f"Failed: {error}",
-            size=item.size,
-            release_id=item.release_id,
-            payload=item.payload,
-            links=item.links,
-        )
-        download_history[nzo_id] = history_item
-        del download_queue[nzo_id]
+        _move_to_history(download_queue[nzo_id], status=f"Failed: {error}")
 
 
 def update_progress(nzo_id: str, percentage: int, status: str = None):
@@ -479,20 +488,7 @@ def update_progress(nzo_id: str, percentage: int, status: str = None):
 def mark_manual_download(nzo_id: str, message: str):
     """Move item to history with manual-download status."""
     if nzo_id in download_queue:
-        item = download_queue[nzo_id]
-        history_item = HistoryItem(
-            nzo_id=item.nzo_id,
-            name=item.filename,
-            category=item.category,
-            status=message,
-            size=item.size,
-            storage="",
-            release_id=item.release_id,
-            payload=item.payload,
-            links=item.links,
-        )
-        download_history[nzo_id] = history_item
-        del download_queue[nzo_id]
+        _move_to_history(download_queue[nzo_id], status=message)
 
 
 def _enqueue_payload(payload: str, nzbname: str | None, category: str | None) -> QueueItem:
