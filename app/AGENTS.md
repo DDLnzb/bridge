@@ -34,7 +34,9 @@ Es gibt **zwei** getrennte Prüfungen, beide gegen `config.DDLNZB_API_KEY`:
 Zwei Eigenschaften, die bei Änderungen nicht verloren gehen dürfen:
 
 - **Leere Konfiguration schließt.** Ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig (`not config.DDLNZB_API_KEY or ...`). Andernfalls ließe sich eine Bridge ohne Key abschalten.
-- **`secrets.compare_digest`, nicht `==`.** Zeitkonstanter Vergleich.
+- **`secrets.compare_digest`, nicht `==`.** Zeitkonstanter Vergleich. Stand 2026-10-19 stimmte das nur für `main.py`; der Dispatch in `sabnzbd_api.py` verglich mit `!=` (#478).
+
+  ⚠️ **Verhaltenstests unterscheiden das nicht.** Beide Vergleiche liefern dieselbe Antwort, der Unterschied liegt nur in der Laufzeit. `tests/test_api_dispatch_auth.py` beobachtet deshalb den *Aufruf* von `compare_digest` über eine Attrappe — mit einem Mutationstest bestätigt, dass die übrigen zehn Tests bei der Rückkehr zu `!=` grün bleiben. Wer die Prüfung umstellt, muss den Spy mitpflegen, sonst ist die Absicherung wirkungslos.
 
 `mode=auth` gibt `{"auth": "ok"}` zurück — es wird **kein** Key-Hash verglichen, nur Gleichheit.
 
@@ -93,6 +95,7 @@ Abgedeckt von `tests/`:
 | Datei | Bereich |
 | --- | --- |
 | `test_bridge_auth.py` | `require_bridge_key`: alle Routen außer `/health` |
+| `test_api_dispatch_auth.py` | Key-Prüfung am `/api`-Dispatch, inkl. `compare_digest`-Aufruf |
 | `test_queue_transitions.py` | `_move_to_history`, Persistenz über Neustart, `mode=retry` |
 | `test_cloud_links.py` | URL-Bildung aus `release_id`, Fortschrittsberechnung |
 | `test_state_restore.py` | State-Restore über Modulimport, Roundtrip |
