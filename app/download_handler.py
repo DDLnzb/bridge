@@ -268,12 +268,27 @@ class DownloadHandler:
         idle_interval = 300  # 5 minutes
         deadline = asyncio.get_event_loop().time() + max_duration
 
+        # `matched` ist ein Zustand des **Monitorings**, nicht des einzelnen
+        # Poll-Aufrufs, und lebt deshalb außerhalb der Schleife.
+        #
+        # Bis zum 2026-10-19 schlief der `except`-Zweig **immer** 300 s, auch
+        # während ein Download lief. Ein einzelner ausgesetzter JDownloader
+        # frozeerte die Fortschrittsanzeige für fünf Minuten und kostete den
+        # Rest der 30-Minuten-Frist (#477).
+        #
+        # Der Zustand wird nur zurückgesetzt, wenn JDownloader **erfolgreich**
+        # geantwortet hat und das Paket darin nicht mehr enthalten war. Ein
+        # Fehler beim Abruf sagt nichts über den Paketzustand aus — das ist der
+        # Unterschied, der hier die 300 s rechtfertigt.
+        matched = False
+
         while asyncio.get_event_loop().time() < deadline:
             if nzo_id not in download_queue:
                 return  # Download was cancelled
 
             try:
                 packages = await jdownloader.get_packages()
+                # Die Abfrage war erfolgreich: der Zustand ist jetzt bekannt.
                 matched = False
                 for pkg in packages or []:
                     if package_name.lower() in pkg.get("name", "").lower():
@@ -301,7 +316,10 @@ class DownloadHandler:
                 await asyncio.sleep(active_interval if matched else idle_interval)
             except Exception as e:
                 logger.warning("JDownloader monitoring error: %s", e)
-                await asyncio.sleep(idle_interval)
+                # `matched` steht hier bewusst außerhalb des `try` — siehe die
+                # Erklärung zur Schleifenkopf. Ein Poll-Fehler bei laufendem
+                # Download darf den Warteschlaf nicht auf 300 s verlängern.
+                await asyncio.sleep(active_interval if matched else idle_interval)
 
         # Timeout
         fail_download(nzo_id, "Download timeout")
