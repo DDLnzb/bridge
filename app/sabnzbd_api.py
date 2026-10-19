@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import re
+import secrets
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -177,7 +178,7 @@ async def sabnzbd_api(
     if not config.DDLNZB_API_KEY:
         return _error_response("Bridge API key not configured", output)
 
-    if apikey != config.DDLNZB_API_KEY:
+    if not secrets.compare_digest(apikey or "", config.DDLNZB_API_KEY):
         return _error_response("Invalid API key", output)
 
     if mode == "auth":
