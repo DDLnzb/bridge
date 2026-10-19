@@ -71,9 +71,17 @@ Zwei Eigenschaften stecken bewusst darin:
 
 Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert. Sie stammt aus einem Base64-Payload und wird ungeprüft in `GET /api/v1/links/{release_id}` interpoliert. Der frühere `by-source`-Zweig (mit `source_url`/`hoster`-Param) ist entfernt — im Backend existiert dieser Pfad nicht, siehe `../AGENTS.md`.
 
+### Der Warteschlaf folgt dem Paketzustand, nicht dem Poll-Erfolg
+
+`_monitor_jdownloader()` wählt zwischen `active_interval` (5s) und `idle_interval` (300s) über das Flag `matched`. Das ist ein **Zustand des Monitorings**, kein Ergebnis des einzelnen Poll-Aufrufs, und lebt deshalb außerhalb der `while`-Schleife.
+
+Die Regel dahinter: **ein Poll-Fehler sagt nichts über den Paketzustand.** Bis zum 2026-10-19 schlief der `except`-Zweig immer 300s, auch während ein Download lief — ein einzelner ausgesetzter JDownloader frozeerte die Fortschrittsanzeige für fünf Minuten und verbrauchte den Rest der 30-Minuten-Frist (#477). Beide Zweige wählen den Abstand jetzt aus demselben `matched`.
+
+`matched` wird nur zurückgesetzt, wenn `get_packages()` **erfolgreich** war und das Paket darin nicht mehr enthalten war. Ein Fehler beim Abruf darf den Zustand nicht löschen. Wer das Flag am Anfang jeder Iteration zurücksetzt, baut genau den alten Fehler in anderer Form — die letzte bekannte Paketsicht geht dann beim ersten Poll-Fehler verloren.
+
 ### Division im Fortschritt
 
-`_monitor_jdownloader()` rechnet `(bytesLoaded / bytesTotal) * 100`. JDownloader meldet `bytesTotal: 0`, solange die Gesamtgröße des Pakets nicht feststeht — der Wert ist also **normal**, nicht nur ein Ausnahmefall. Ohne den `if bytes_total > 0`-Schutz entsteht eine `ZeroDivisionError`, die vom breiten `except Exception` unten im Loop geschluckt wird; anschließend schläft der Handler `idle_interval` (300s) und verliert den Fortschritt für fünf Minuten.
+`_monitor_jdownloader()` rechnet `(bytesLoaded / bytesTotal) * 100`. JDownloader meldet `bytesTotal: 0`, solange die Gesamtgröße des Pakets nicht feststeht — der Wert ist also **normal**, nicht nur ein Ausnahmefall. Ohne den `if bytes_total > 0`-Schutz entsteht eine `ZeroDivisionError`, die vom breiten `except Exception` unten im Loop geschluckt wird; anschließend wartet der Handler bis zum nächsten Poll, bei laufendem Download also 5s statt 300s.
 
 ## Verification
 
@@ -99,7 +107,10 @@ Abgedeckt von `tests/`:
 | `test_queue_transitions.py` | `_move_to_history`, Persistenz über Neustart, `mode=retry` |
 | `test_cloud_links.py` | URL-Bildung aus `release_id`, Fortschrittsberechnung |
 | `test_state_restore.py` | State-Restore über Modulimport, Roundtrip |
+| `test_monitor_intervals.py` | Warteschlaf-Wahl in `_monitor_jdownloader` (5s/300s, Fehlerzweig, Verschwinden des Pakets) |
 | `test_smoke.py` | Platzhalter (`assert True`) |
+
+`test_monitor_intervals.py` füllt `app.sabnzbd_api.download_queue` **direkt** und ersetzt weder `asyncio.sleep` noch die Zeitquelle des Handlers dauerhaft — siehe die `fresh_import()`-Warnung im Parent-Doc. Die 30-Minuten-Frist wird über einen Kontextmanager gestellt, der `asyncio.get_event_loop()` nur während des Handler-Aufrufs ersetzt: eine Attrappe auf `loop.time` allein genügt nicht, weil der Event-Loop `self.time()` selbst aufruft und die Zählung um einen Durchlauf verschöbe.
 
 Weiterhin **ohne** Tests: JDownloader-Verbindung, Heartbeat, `queue_persistence`.
 
