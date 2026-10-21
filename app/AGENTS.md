@@ -20,6 +20,11 @@ Export frisch gesetzt, weil sie sonst nur den Stand des letzten Scrape zeigen.
 Die Alert-Regeln in `monitoring/prometheus/rules/ddlnzb-alerts.yml` greifen auf
 genau diese Namen zu.
 
+Das `endpoint`-Label trägt das **Route-Template** (`_route_template()`), nicht
+den rohen Pfad — sonst erzeugt jeder Link-Titel und jeder Scanner-Treffer eine
+eigene Serie und die TSDB wächst ohne Grenzen. Ohne Route-Treffer landet der
+Request in `unmatched`.
+
 ### Globale Instanzen statt Dependency Injection
 
 Vier Modul-Globals, die einmal beim Import erzeugt werden: `jdownloader`, `download_handler`, `jd_heartbeat`, `queue_persistence`, dazu die Queue-Listen `download_queue` und `download_history` in `sabnzbd_api.py`.
