@@ -252,7 +252,8 @@ async def metrics() -> Response:
     return Response(content=payload, media_type=content_type)
 
 
-@app.get("/status", dependencies=[Depends(require_bridge_key)])async def status():
+@app.get("/status", dependencies=[Depends(require_bridge_key)])
+async def status():
     """Detailed status endpoint."""
     return {
         "name": "DDLnzb Bridge",
