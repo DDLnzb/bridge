@@ -138,16 +138,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def _route_template(request: Request) -> str:
+    """Route-Template statt des rohen Pfads als Label-Wert.
+
+    Der rohe Pfad ist unbeschaenkt in der Kardi­nalitaet: jeder Link-Titel
+    und jeder Scanner-Treffer erzeugt eine eigene Serie. Das Template
+    (`/api`) haelt das Label bounded.
+
+    Aufgeloest wird das Template erst **nach** `call_next`, weil Starlette die
+    Route erst im Routing-Schritt setzt. Requests ohne Treffer landen in
+    `unmatched`.
+    """
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    return template or "unmatched"
+
+
 @app.middleware("http")
 async def prometheus_metrics(request: Request, call_next):
     service = "bridge"
-    endpoint = request.url.path
     method = request.method
     start_time = time.perf_counter()
 
     bridge_http_requests_in_flight.labels(service=service).inc()
     try:
         response = await call_next(request)
+        endpoint = _route_template(request)
         status_code = str(response.status_code)
         duration = time.perf_counter() - start_time
         bridge_http_requests_total.labels(
@@ -164,6 +181,7 @@ async def prometheus_metrics(request: Request, call_next):
         return response
     except Exception:
         duration = time.perf_counter() - start_time
+        endpoint = _route_template(request)
         bridge_http_requests_total.labels(
             method=method,
             endpoint=endpoint,
@@ -206,7 +224,9 @@ async def require_bridge_key(
     if authorization and authorization.lower().startswith("bearer "):
         bearer = authorization[7:].strip()
     presented = x_api_key or apikey or bearer
-    if not config.DDLNZB_API_KEY or not secrets.compare_digest(presented or "", config.DDLNZB_API_KEY):
+    if not config.DDLNZB_API_KEY or not secrets.compare_digest(
+        presented or "", config.DDLNZB_API_KEY
+    ):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
