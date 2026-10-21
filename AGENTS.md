@@ -95,6 +95,8 @@ Der Pfad muss im Working Tree liegen.
 
 `pyproject.toml` und `poetry.lock` sind die einzige Abhängigkeitsquelle der Bridge. Ein `requirements.txt` gab es bis 2026-10-19, wurde von keinem Build-Pfad gelesen und wich vom Lockfile ab; es ist entfernt. **Keine zweite Deklaration anlegen** — Dependabot würde beide scannen und doppelte PRs erzeugen, von denen nur einer die installierte Version ändert.
 
+`prometheus-client` (>=0.24.1,<0.27.0) ist seit PR #210 eine Bridge-Abhängigkeit: `app/metrics.py` exportiert `ddlnzb_bridge_*`, und der Monitoring-Stack scrapt den Bridge über `GET /metrics`.
+
 ## Child DOX Index
 
 | Child | Scope |
