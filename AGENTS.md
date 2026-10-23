@@ -14,6 +14,7 @@ Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
 - `src/` — Stub/Parallelimplementierung, siehe unten
 - `Dockerfile`, `pyproject.toml`, `README.md`
 - `.env`, `.env.example`
+- `docs/` — Screenshots der Web-Oberfläche (nur Bilddateien, keine Dokumentation)
 
 ## Local Contracts
 
