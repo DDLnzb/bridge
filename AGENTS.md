@@ -62,6 +62,16 @@ An Position 2 setzt das Backend `str(release.id)` — also die **Release-UUID**,
 
 ⚠️ Der Bridge dekodiert das **zweimal**, in `app/sabnzbd_api.py` (`decode_payload`) und `app/download_handler.py` (`_parse_payload`). Die Kopien können auseinanderlaufen. Änderungen am Format müssen an beiden Stellen nachgezogen werden.
 
+### Image-Architekturen
+
+Das Image `ddlnzb-bridge` ist **mehrarchitekturfähig**: sein Tag (Versionstag wie `:latest`) zeigt auf eine Manifest-Liste mit `linux/arm64` **und** `linux/amd64`.
+
+**Warum:** Die Bridge ist der einzige Baustein des Stacks, der auf dem x86_64-Unraid-Produktionshost laufen soll. Die Images `ddlnzb-api` und `ddlnzb-web` bleiben arm64-only — auf einem x86_64-Host scheitert ihr Pull mit `no matching manifest for linux/amd64`. Issue #677.
+
+**Wie:** Der Job `docker-bridge` in `ci.yml` baut beide Plattformen; der arm64-Zweig nativ auf dem ARM64-Runner, der amd64-Zweig emuliert über QEMU. Nach dem Push prüft der Job das Manifest selbst — fehlt eine der beiden Plattformen, wird der Job rot und es entsteht kein Release.
+
+⚠️ **Die Manifest-Liste darf nicht eingedampft werden.** Ein `docker pull` + `tag` + `push` auf einem ARM64-Host zieht nur die arm64-Variante und verliert die amd64-Variante. Der Alias im `release`-Job benutzt für die Bridge deshalb `docker buildx imagetools create` (für api und web bleibt der alte `pull` + `tag` + `push`-Weg, die sind Einzelplattform-Images).
+
 ### Ports
 
 Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` veröffentlicht). `BRIDGE_PORT` hat dagegen den Default `8080`, den das Dockerfile per `--port 6789` überschreibt. Die `.env.example` beschreibt `BRIDGE_PORT` — dem Dockerfile-Vorrang geben.
