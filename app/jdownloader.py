@@ -33,6 +33,7 @@ class MyJDownloaderAPI:
         self._device = None
 
         self.device_id: str | None = None
+        self.connected_device: str | None = None
         self.last_error: str | None = None
 
     async def _run(self, fn, *args, **kwargs):
@@ -77,6 +78,7 @@ class MyJDownloaderAPI:
 
         self._device = device
         self.device_id = getattr(device, "device_id", None)
+        self.connected_device = getattr(device, "name", None)
 
         return {
             "name": getattr(device, "name", ""),
@@ -149,6 +151,43 @@ class MyJDownloaderAPI:
 
         self._device = None
         self.device_id = None
+        self.connected_device = None
+        return True
+
+    async def reconfigure(self) -> bool:
+        """Mit den aktuellen Konfigurationswerten neu verbinden.
+
+        Wird nach dem Speichern der Konfiguration ueber die Web-Oberflaeche
+        aufgerufen: die Zugangsdaten koennen sich geaendert haben, und der
+        bestehende `myjdapi`-Client haelt die alten Werte bis zum Neustart.
+
+        Gibt `True` zurueck, wenn die Verbindung steht **und** das konfigurierte
+        Geraet gefunden wurde - beides wird von der Oberflaeche als "verbunden"
+        angezeigt.
+        """
+        await self.disconnect()
+
+        self.email = config.MYJD_EMAIL
+        self.password = config.MYJD_PASSWORD
+        self.device_name = config.MYJD_DEVICE_NAME
+        self._client.set_app_key(config.MYJD_APP_KEY)
+
+        if not self.email or not self.password:
+            logger.warning("JDownloader credentials not configured - keine Verbindung")
+            return False
+
+        try:
+            await self.connect()
+            device = await self.get_device()
+        except Exception as exc:
+            logger.error("JDownloader reconnect failed: %s", exc)
+            return False
+
+        if not device:
+            logger.warning("JDownloader device '%s' not found", config.MYJD_DEVICE_NAME)
+            return False
+
+        logger.info("JDownloader neu verbunden: %s", device.get("name"))
         return True
 
     async def debug_snapshot(self) -> dict[str, Any]:
