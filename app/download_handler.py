@@ -13,7 +13,14 @@ import httpx
 
 from app.config import config
 from app.jdownloader import jdownloader
-from app.sabnzbd_api import complete_download, download_queue, fail_download, update_progress
+from app.sabnzbd_api import (
+    SAB_STATUS_QUEUED,
+    complete_download,
+    download_queue,
+    fail_download,
+    set_item_size,
+    update_progress,
+)
 
 logger = logging.getLogger("ddlnzb.bridge")
 
@@ -52,7 +59,7 @@ class DownloadHandler:
             try:
                 # Process pending downloads
                 for nzo_id, item in list(download_queue.items()):
-                    if item.status == "Queued":
+                    if item.status == SAB_STATUS_QUEUED:
                         logger.debug("Starting processing for %s (%s)", nzo_id, item.filename)
                         update_progress(nzo_id, 0, "Starting download...")
                         await self._process_download(nzo_id, item)
@@ -81,9 +88,7 @@ class DownloadHandler:
             # in #374 an; der eindeutige Name gehört hierher.
             title, release_id, mirror, size, password, imdb_id = release_info
             if size and size > 0:
-                size_mb = f"{size / (1024 * 1024):.2f} MB"
-                item.size = size_mb
-                item.sizeleft = size_mb
+                set_item_size(item, size)
             item.release_id = release_id
             logger.debug(
                 "Parsed payload for %s: title=%s mirror=%s size=%s",
@@ -128,7 +133,9 @@ class DownloadHandler:
                 item.links = links
                 update_progress(nzo_id, 100, "Links ready")
                 logger.info("Stored links for %s; no JDownloader configured", nzo_id)
-                complete_download(nzo_id, f"Links available ({len(links)} URLs)")
+                # Kein JDownloader, also gibt es keinen Ablageort - der Text
+                # gehoert in das Klartextfeld, nicht in `storage` (#659).
+                complete_download(nzo_id, "", f"Links available ({len(links)} URLs)")
 
         except Exception as e:
             logger.exception("Processing error for %s: %s", nzo_id, e)
@@ -304,7 +311,16 @@ class DownloadHandler:
                         else:
                             progress = 0
 
-                        update_progress(nzo_id, 20 + int(progress * 0.8), "Downloading...")
+                        # Die echten Bytes mitgeben: daraus leitet
+                        # `update_progress` die Restgroesse (`sizeleft`) ab.
+                        # Ohne sie bliebe `sizeleft` auf dem Startwert (#658).
+                        update_progress(
+                            nzo_id,
+                            20 + int(progress * 0.8),
+                            "Downloading...",
+                            bytes_loaded=bytes_loaded,
+                            bytes_total=bytes_total,
+                        )
 
                         # Check if complete
                         if pkg.get("finished", False):
