@@ -41,7 +41,11 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Die Registry verlangt Kleinschreibung im Pfad. `github.repository` liefert
+  # die Schreibweise der Org ("DDLnzb") - daraus wird ein Tag, den buildx mit
+  # "repository name must be lowercase" ablehnt. Die Org wird darum hier
+  # kleingeschrieben gesetzt; der Repo-Name ist bereits kleingeschrieben.
+  IMAGE_NAME: ddlnzb/${{ github.event.repository.name }}
 
 jobs:
   # ===========================
@@ -194,7 +198,7 @@ jobs:
         run: |
           set -uo pipefail
           name="${IMAGE_NAME##*/}"
-          visibility=$(gh api "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}" \
+          visibility=$(gh api "/orgs/ddlnzb/packages/container/${name}" \
             --jq '.visibility' 2>/dev/null || echo "unbekannt")
           echo "::notice::Package ${name} hat die Sichtbarkeit '${visibility}'"
           if [ "$visibility" != "public" ]; then
