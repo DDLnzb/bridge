@@ -70,6 +70,12 @@ jobs:
         run: poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root --with dev
 
       - name: Tests laufen
+        # Die Testmodule importieren absolut als `from app.…`. Im Monorepo
+        # liefert `working-directory: bridge` das passende Root; im public Repo
+        # liegt der Code schon im Root, aber pytest setzt das Root-Verzeichnis
+        # nicht automatisch in den Importpfad. PYTHONPATH stellt das sicher.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: poetry run pytest tests/ -v
 
   # ===========================
@@ -154,11 +160,15 @@ jobs:
           image="${REGISTRY}/${IMAGE_NAME}"
           # Die Architektur-Jobs pushen auf Tags mit Plattform-Suffix, damit
           # beide Images existieren, bevor das Manifest sie zusammenfuehrt.
-          for plat in amd64 arm64; do
-            docker buildx imagetools create \
-              --tag "${image}:${version}" \
-              "${image}:${version}-${plat}"
-          done
+          #
+          # Wichtig: `imagetools create` ERSETZT den Ziel-Tag. Ein zweiter
+          # Aufruf auf denselben Tag wuerde das erste Manifest wieder
+          # ueberschreiben - dann enthielte das Manifest nur eine Plattform.
+          # Darum fasst ein einziger Aufruf beide Plattformen zusammen.
+          docker buildx imagetools create \
+            --tag "${image}:${version}" \
+            "${image}:${version}-amd64" \
+            "${image}:${version}-arm64"
           # `latest` zeigt auf das Manifest, nicht auf ein Einzel-Arch-Image.
           docker buildx imagetools create \
             --tag "${image}:latest" \
