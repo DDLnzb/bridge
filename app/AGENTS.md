@@ -8,6 +8,23 @@ SABnzbd-kompatible API-Oberfläche, Queue-Verwaltung, JDownloader-Anbindung und 
 
 ## Local Contracts
 
+### Prometheus-Metriken des Bridge
+
+`metrics.py` definiert vier Metriken mit dem Präfix `ddlnzb_bridge_`: HTTP-Requests
+(Label `service="bridge"`), Request-Dauer, Requests in flight und die
+Queue-Tiefe (`state` = `total`/`queued`/`downloading`).
+
+Die Zähler werden über die HTTP-Middleware in `main.py` gefüllt, die
+Queue-Tiefe über den Endpunkt `GET /metrics` — dort werden die Gauges vor dem
+Export frisch gesetzt, weil sie sonst nur den Stand des letzten Scrape zeigen.
+Die Alert-Regeln in `monitoring/prometheus/rules/ddlnzb-alerts.yml` greifen auf
+genau diese Namen zu.
+
+Das `endpoint`-Label trägt das **Route-Template** (`_route_template()`), nicht
+den rohen Pfad — sonst erzeugt jeder Link-Titel und jeder Scanner-Treffer eine
+eigene Serie und die TSDB wächst ohne Grenzen. Ohne Route-Treffer landet der
+Request in `unmatched`.
+
 ### Globale Instanzen statt Dependency Injection
 
 Vier Modul-Globals, die einmal beim Import erzeugt werden: `jdownloader`, `download_handler`, `jd_heartbeat`, `queue_persistence`, dazu die Queue-Listen `download_queue` und `download_history` in `sabnzbd_api.py`.
@@ -27,9 +44,11 @@ Es gibt **zwei** getrennte Prüfungen, beide gegen `config.DDLNZB_API_KEY`:
 | Ort | Form | Verhalten bei Abweichung |
 | --- | --- | --- |
 | `sabnzbd_api.py`, Dispatch am `/api`-Endpunkt | Query-Param `apikey` | `{"status": false, "error": "Invalid API key"}` |
-| `main.py`, Dependency `require_bridge_key` | Header `X-API-Key` **oder** Query-Param `apikey` | `HTTPException(401, "Invalid API key")` |
+| `main.py`, Dependency `require_bridge_key` | Header `X-API-Key`, Query-Param `apikey` **oder** `Authorization: Bearer <key>` | `HTTPException(401, "Invalid API key")` |
 
-`require_bridge_key` hängt an `@app.get("/")`, `@app.get("/status")` und `@app.post("/heartbeat/reconnect")`. **Neue Routen in `main.py` brauchen diese Dependency ausdrücklich** — FastAPI schützt nichts automatisch. `/health` ist die einzige bewusst offene Route: Docker-HEALTHCHECK und Load-Balancer müssen sie ohne Zugangsdaten erreichen.
+`require_bridge_key` hängt an `@app.get("/")`, `@app.get("/status")`, `@app.get("/metrics")` und `@app.post("/heartbeat/reconnect")`. **Neue Routen in `main.py` brauchen diese Dependency ausdrücklich** — FastAPI schützt nichts automatisch. `/health` ist die einzige bewusst offene Route: Docker-HEALTHCHECK und Load-Balancer müssen sie ohne Zugangsdaten erreichen.
+
+Der **Bearer**-Weg existiert für Prometheus: der kann keinen freien Header setzen, sondern nur `bearer_token_file`. Ohne diesen Weg wäre ein geschütztes `/metrics` nicht abfragbar. Er darf nicht entfernt werden, solange der Monitoring-Stack den Bridge über `bridge:6789/metrics` scrapt.
 
 Zwei Eigenschaften, die bei Änderungen nicht verloren gehen dürfen:
 
