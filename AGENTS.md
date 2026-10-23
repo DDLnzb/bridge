@@ -69,6 +69,7 @@ Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` ver�
 - `myjdapi` ist ein **synchroner** Client. Die Bridge kapselt ihn mit `asyncio.to_thread`. Jede neue JDownloader-Methode muss in diesem Muster bleiben, sonst blockiert der Event-Loop.
 - `CATEGORY_MAPPING` ist in `BridgeConfig.__post_init__` verdrahtet. Der Kommentar in `.env.example`, der einen JSON-String-Override beschreibt, ist **nicht implementiert** — der Beispielwert täuscht.
 - Zwei Persistenzmechanismen laufen parallel: `sabnzbd_api._persist_state()` schreibt die komplette Queue+History in `STATE_PATH`, `persistence.QueuePersistence` schreibt nur die Queue nach `DATA_DIR/queue.json` (mit atomarem Schreiben via `.tmp` + `replace()`). Beide werden im Lifespan unabhängig genutzt.
+- Der State-Datei führt die Größe in **Bytes** (`size_bytes`, `sizeleft_bytes`), nicht als Text. Ältere Dateien mit `size`/`sizeleft` werden beim Laden über `_bytes_aus_groessen_text()` umgerechnet. Unbekannte Felder in der Datei werden verworfen (`_bekannte_felder()`) — sonst verschluckt `_load_state()` den Fehler und die Queue ist nach dem Neustart **stillschweigend leer**.
 
 ## Verification
 
@@ -77,13 +78,15 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 7 Testdateien mit 42 Testfunktionen (Stand 2026-10-19). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore und die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung).
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 8 Testdateien mit 68 Testfunktionen (Stand 2026-10-23). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und die SABnzbd-Kompatibilität (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, Größe in Zahlen, Status-Vokabular).
 
 Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
 `tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
 
 ⚠️ **Nicht jeden Test darf `fresh_import()` benutzen.** `download_handler._monitor_jdownloader()` greift über eine Modul-Referenz auf `download_queue` zu. `fresh_import()` erzeugt ein neues Dict, das der Handler nicht sieht — der Eintrag fehlt, die Schleife kehrt sofort zurück und der Test wäre stillschweigend grün. Solche Tests befüllen `app.sabnzbd_api.download_queue` direkt und prüfen anschließend, dass `get_packages` wirklich aufgerufen wurde.
+
+⚠️ **Wer über die HTTP-API testet, darf `app.sabnzbd_api` nicht erst zur Testzeit importieren.** `fresh_import()` entfernt das Modul aus `sys.modules` und importiert es neu — der Router in `app.main` hält aber die **alte** Modulinstanz. Ein `import app.sabnzbd_api` **innerhalb** der Testfunktion liefert danach ein anderes Modul: der Test befüllt eine Queue, die der Router nicht sieht, und die Antworten kommen leer zurück. Der Import gehört deshalb auf **Modulebene** der Testdatei — dann bindet er die Instanz, die auch `app.main` benutzt. Betroffen ist jeder Test, der über `/api` geht (`tests/test_sabnzbd_compat.py`).
 
 Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absolut als `from app.…` importiert werden. **Dabei `python -m pytest` verwenden, nicht das `pytest`-Skript.** Das Skript legt das aktuelle Verzeichnis nicht auf `sys.path`; legt es eine alte Installation hinein (z. B. eine `.pth`-Datei eines früheren `poetry install` auf ein fremdes Verzeichnis), importiert pytest `app.*` von dort statt aus dem Working Tree. Das trifft Tests stillschweigend falsch — sie laufen gegen einen anderen Stand und schlagen dann für Gründe fehl, die im Working Tree nicht existieren. Gegenprobe bei Verdacht:
 
