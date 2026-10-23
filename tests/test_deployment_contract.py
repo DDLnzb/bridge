@@ -21,12 +21,27 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_DIR = REPO_ROOT / "bridge"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.prod.yml"
 CONFIG_FILE = BRIDGE_DIR / "app" / "config.py"
 README_FILE = BRIDGE_DIR / "README.md"
 ENV_FILE = BRIDGE_DIR / ".env"
+
+#: Dieser Test prueft den **Monorepo**-Vertrag: die Compose-Datei des
+#: Produktionsstacks und die versionierte `bridge/.env`. Beides existiert im
+#: public Repo `DDLnzb/bridge` bewusst nicht - dort liegt der Code im
+#: Repo-Root, es gibt keine Compose-Datei und keine versionierten
+#: Zugangsdaten. Die Pruefungen laufen deshalb nur im Monorepo, wo ihr
+#: Gegenstand liegt.
+if not BRIDGE_DIR.is_dir():
+    pytest.skip(
+        "Monorepo-Vertrag (docker-compose.prod.yml, bridge/.env) - "
+        "im public Repo nicht vorhanden",
+        allow_module_level=True,
+    )
 
 #: Variablen des `src/`-Stubs. Die Bridge startet `app/` - diese Namen liest
 #: kein laufender Prozess. Wer sie in der README findet, folgt dem falschen

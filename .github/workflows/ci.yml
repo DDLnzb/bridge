@@ -1,0 +1,202 @@
+# =============================================================================
+# DDLnzb Bridge - CI
+# =============================================================================
+# Baut das Bridge-Image als Multi-Arch (linux/amd64 + linux/arm64) und schiebt
+# es nach ghcr.io/ddlnzb/bridge.
+#
+# Warum zwei Plattformen: die Bridge laeuft auf dem x86_64-Unraid-Produktions-
+# host und auf ARM64-Dev-Hosts. Ein arm64-only-Image laesst sich auf x86_64
+# nicht pullen ("no matching manifest").
+#
+# Der Code in diesem Repo ist ein Spiegel aus dem Monorepo. Der Sync laeuft
+# dort: .github/workflows/ci.yml (Job `sync-bridge-public`).
+#
+# Das Image wird mit dem GITHUB_TOKEN dieses Repos gepusht. Das setzt die
+# Zugriffsrechte des Pakets auf dieses Repo - das Package gehoert der
+# Organisation DDLnzb.
+#
+# WICHTIG: Die Sichtbarkeit des Packages muss EINMALIG von Hand auf "public"
+# gestellt werden (GitHub UI: Packages -> ddlnzb-bridge -> Package settings
+# -> Change visibility -> Public). Der GITHUB_TOKEN kann das nicht - die
+# Aenderung braucht einen Token mit `write:packages` und `admin:org`. Der
+# Job `check-visibility` sagt Bescheid, solange das fehlt.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===========================
+  # Tests
+  # ===========================
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Python installieren
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Poetry installieren
+        run: pip install "poetry==1.7.1"
+
+      - name: Abhaengigkeiten installieren
+        run: poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root --with dev
+
+      - name: Tests laufen
+        run: poetry run pytest tests/ -v
+
+  # ===========================
+  # Image bauen und publizieren
+  # ===========================
+  build:
+    name: Image bauen (${{ matrix.platform }})
+    # Zwei Jobs: einer baut arm64 nativ, der andere amd64 nativ. Das ist
+    # schneller und verlaesslicher als ein Multi-Arch-Build mit QEMU, bei dem
+    # der fremde-arch-Zweig emuliert laeuft (Poetry-Install unter Emulation
+    # kostet Minuten).
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            suffix: amd64
+          - platform: linux/arm64
+            suffix: arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare image metadata
+        id: meta
+        run: |
+          echo "version=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          # Jeder Architektur-Job pusht auf einen eigenen Tag mit Suffix. Erst
+          # wenn beide existieren, kann das Manifest-Job sie zusammenfuehren.
+          echo "tag=${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA::12}-${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Image bauen und pushen
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=DDLnzb Bridge
+            org.opencontainers.image.description=SABnzbd-kompatible Download-Bridge fuer DDLnzb
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+
+  # ===========================
+  # Multi-Arch-Manifest
+  # ===========================
+  manifest:
+    name: Manifest zusammenfuehren
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build]
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Manifest mit beiden Plattformen pushen
+        run: |
+          set -euo pipefail
+          version="${GITHUB_SHA::12}"
+          image="${REGISTRY}/${IMAGE_NAME}"
+          # Die Architektur-Jobs pushen auf Tags mit Plattform-Suffix, damit
+          # beide Images existieren, bevor das Manifest sie zusammenfuehrt.
+          for plat in amd64 arm64; do
+            docker buildx imagetools create \
+              --tag "${image}:${version}" \
+              "${image}:${version}-${plat}"
+          done
+          # `latest` zeigt auf das Manifest, nicht auf ein Einzel-Arch-Image.
+          docker buildx imagetools create \
+            --tag "${image}:latest" \
+            "${image}:${version}"
+          echo "::notice::Manifest ${image}:${version} erstellt"
+
+      - name: Pruefe, dass beide Plattformen im Manifest stehen
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${IMAGE_NAME}"
+          out=$(docker buildx imagetools inspect "${image}:latest")
+          for plat in linux/amd64 linux/arm64; do
+            if ! grep -qE "Platform: +$plat" <<<"$out"; then
+              echo "::error::Manifest enthaelt $plat nicht - der Pull auf x86_64-Hosts scheitert"
+              echo "$out"
+              exit 1
+            fi
+          done
+          echo "::notice::Manifest enthaelt linux/amd64 und linux/arm64"
+
+  # ===========================
+  # Sichtbarkeit pruefen
+  # ===========================
+  # Der GITHUB_TOKEN kann die Package-Sichtbarkeit nicht auf "public" stellen.
+  # Dieser Job sagt Bescheid, solange das Image nicht anonym pullbar ist - so
+  # faellt der Zustand auf, statt still zu bleiben.
+  check-visibility:
+    name: Package-Sichtbarkeit pruefen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [manifest]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Sichtbarkeit auslesen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          name="${IMAGE_NAME##*/}"
+          visibility=$(gh api "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}" \
+            --jq '.visibility' 2>/dev/null || echo "unbekannt")
+          echo "::notice::Package ${name} hat die Sichtbarkeit '${visibility}'"
+          if [ "$visibility" != "public" ]; then
+            echo "::warning::Das Image ist noch nicht anonym pullbar. Einmalig von Hand umstellen: GitHub -> Organization DDLnzb -> Packages -> ${name} -> Package settings -> Change visibility -> Public"
+          fi
