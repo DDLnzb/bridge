@@ -5,11 +5,16 @@ Deckt #383 ab (Persistenz bei `fail_download` / `mark_manual_download`) und
 
 Geprüft wird Verhalten, nicht Quelltext: jeder Test bewegt einen Eintrag, liest
 den Zustand neu aus der State-Datei und prüft das Ergebnis.
+
+Mit #659 trägt `status` nur noch einen Wert aus dem SABnzbd-Vokabular; der
+ausführliche Text steht in `message`. Die Größe wird in Bytes geführt
+(`size_bytes`), nicht mehr als Text.
 """
 
 import json
 
 LINKS = ["https://example.invalid/a.bin", "https://example.invalid/b.bin"]
+GROSSE = 700 * 1024 * 1024
 
 
 def _queue_item(module, nzo_id="nzo-1", links=None):
@@ -17,7 +22,8 @@ def _queue_item(module, nzo_id="nzo-1", links=None):
         nzo_id=nzo_id,
         filename="Some.Release-GRP",
         category="movies",
-        size="700 MB",
+        size_bytes=GROSSE,
+        sizeleft_bytes=GROSSE,
         links=list(links or []),
     )
     module.download_queue[nzo_id] = item
@@ -43,7 +49,8 @@ def test_fail_download_ueberlebt_den_neustart(fresh_import):
         "Fehlgeschlagener Download ist nach dem Neustart spurlos verschwunden - "
         "fail_download() persistiert den Zustand nicht"
     )
-    assert reloaded.download_history["nzo-1"].status == "Failed: Hoster down"
+    assert reloaded.download_history["nzo-1"].status == "Failed"
+    assert reloaded.download_history["nzo-1"].message == "Hoster down"
 
 
 def test_mark_manual_download_ueberlebt_den_neustart(fresh_import):
@@ -54,7 +61,8 @@ def test_mark_manual_download_ueberlebt_den_neustart(fresh_import):
 
     reloaded = fresh_import()
     assert "nzo-1" in reloaded.download_history
-    assert reloaded.download_history["nzo-1"].status == "Manual download required"
+    assert reloaded.download_history["nzo-1"].status == "Completed"
+    assert reloaded.download_history["nzo-1"].message == "Manual download required"
 
 
 def test_complete_download_ueberlebt_den_neustart(fresh_import):
@@ -120,8 +128,8 @@ def test_retry_behaelt_links_und_groesse(fresh_import):
 
     requeued = module.download_queue["nzo-1"]
     assert requeued.links == LINKS
-    assert requeued.size == "700 MB"
-    assert requeued.sizeleft == "700 MB"
+    assert requeued.size_bytes == GROSSE
+    assert requeued.sizeleft_bytes == GROSSE
     assert requeued.filename == "Some.Release-GRP"
 
 
