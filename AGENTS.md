@@ -77,7 +77,7 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 7 Testdateien mit 42 Testfunktionen (Stand 2026-10-19). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore und die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung).
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 7 Testdateien mit 53 Testfunktionen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore und die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung).
 
 Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
