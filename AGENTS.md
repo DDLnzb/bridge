@@ -10,7 +10,7 @@ Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
 
 - `app/` — produktive Implementierung (FastAPI, SABnzbd-API, JDownloader-Anbindung)
 - `src/` — Stub/Parallelimplementierung, siehe unten
-- `Dockerfile`, `pyproject.toml`, `README.md`
+- `Dockerfile`, `pyproject.toml`, `README.md` — die README dokumentiert den Configvertrag von `app/`; der `src/`-Stub hat einen eigenen, den kein laufender Prozess liest
 - `.env`, `.env.example`
 
 ## Local Contracts
@@ -63,6 +63,23 @@ An Position 2 setzt das Backend `str(release.id)` — also die **Release-UUID**,
 
 Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` veröffentlicht). `BRIDGE_PORT` hat dagegen den Default `8080`, den das Dockerfile per `--port 6789` überschreibt. Die `.env.example` beschreibt `BRIDGE_PORT` — dem Dockerfile-Vorrang geben.
 
+### Der Compose-Service muss die Zugangsdaten mitgeben
+
+Der Bridge liest seine Konfiguration aus `bridge/.env` — dieselbe Datei, die auch der lokale Start verwendet. `docker-compose.prod.yml` bindet sie deshalb per `env_file: ./bridge/.env` ein und setzt darüber nur die Betriebswerte:
+
+| Variable | Quelle | Wert |
+| --- | --- | --- |
+| `DDLNZB_API_KEY`, `MYJD_*` | `env_file:` | `bridge/.env` |
+| `DDLNZB_API_URL` | `environment:` | `http://api:8000` — im Compose-Netz heißt die API `api`; `localhost` zeigt aus dem Container auf den Container selbst |
+| `BRIDGE_HOST`, `BRIDGE_PORT` | `environment:` | `0.0.0.0` / `6789` — der Dockerfile-`CMD` fixiert beides ohnehin |
+| `DOWNLOAD_DIR` | `environment:` | `${DOWNLOAD_DIR:-/downloads}` |
+
+⚠️ **`environment` schlägt `env_file`.** Wer eine Zugangsdaten-Variable in `environment:` setzt, überschreibt damit den Wert aus `bridge/.env` — auch mit einer leeren Zeichenkette.
+
+⚠️ **Der Publish ist über `BRIDGE_BIND` steuerbar** (`${BRIDGE_BIND:-0.0.0.0}:6789:6789`). Der Default ist wie bei den übrigen Diensten erreichbar; wer den Bridge nur lokal braucht, setzt `BRIDGE_BIND=127.0.0.1` in der `.env` des Hosts.
+
+Der Vertrag ist in `tests/test_deployment_contract.py` festgeschrieben: was `app/config.py` liest, muss in `bridge/.env` stehen, im Compose-Service als Variable gesetzt sein und in der README benannt werden. Ohne `env_file` startet der Bridge zwar, lehnt aber jeden SABnzbd-Aufruf ab („Bridge API key not configured") — der Fehler fällt erst beim ersten *arr-Kontakt auf (#555).
+
 ## Work Guidance
 
 - Alle `app/`-Module importieren absolut als `from app.…`. Start daher nur aus `bridge/`-Wurzel oder mit `PYTHONPATH=bridge`. CI nutzt `working-directory: bridge`.
@@ -77,7 +94,7 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 7 Testdateien mit 42 Testfunktionen (Stand 2026-10-19). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore und die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung).
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 8 Testdateien mit 49 Testfunktionen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und der **Deployment-Vertrag** (`tests/test_deployment_contract.py`: Compose-Service, `bridge/.env` und `README.md` gegen `app/config.py` — #555, #671).
 
 Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
