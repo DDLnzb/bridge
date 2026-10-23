@@ -6,12 +6,15 @@ Lokaler Dienst, der sich gegenüber Radarr/Sonarr/Lidarr/LazyLibrarian als **SAB
 
 Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
 
+Über `http://<host>:6789/ui` lässt sich der Dienst vollständig konfigurieren — der Setup-Token steht im Container-Log, sobald noch kein API-Key gesetzt ist.
+
 ## Ownership
 
 - `app/` — produktive Implementierung (FastAPI, SABnzbd-API, JDownloader-Anbindung)
 - `src/` — Stub/Parallelimplementierung, siehe unten
 - `Dockerfile`, `pyproject.toml`, `README.md` — die README dokumentiert den Configvertrag von `app/`; der `src/`-Stub hat einen eigenen, den kein laufender Prozess liest
 - `.env`, `.env.example`
+- `docs/` — Screenshots der Web-Oberfläche (nur Bilddateien, keine Dokumentation)
 
 ## Local Contracts
 
@@ -63,6 +66,7 @@ An Position 2 setzt das Backend `str(release.id)` — also die **Release-UUID**,
 
 Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` veröffentlicht). `BRIDGE_PORT` hat dagegen den Default `8080`, den das Dockerfile per `--port 6789` überschreibt. Die `.env.example` beschreibt `BRIDGE_PORT` — dem Dockerfile-Vorrang geben.
 
+<<<<<<< HEAD
 ### Der Compose-Service muss die Zugangsdaten mitgeben
 
 Der Bridge liest seine Konfiguration aus `bridge/.env` — dieselbe Datei, die auch der lokale Start verwendet. `docker-compose.prod.yml` bindet sie deshalb per `env_file: ./bridge/.env` ein und setzt darüber nur die Betriebswerte:
@@ -79,6 +83,45 @@ Der Bridge liest seine Konfiguration aus `bridge/.env` — dieselbe Datei, die a
 ⚠️ **Der Publish ist über `BRIDGE_BIND` steuerbar** (`${BRIDGE_BIND:-0.0.0.0}:6789:6789`). Der Default ist wie bei den übrigen Diensten erreichbar; wer den Bridge nur lokal braucht, setzt `BRIDGE_BIND=127.0.0.1` in der `.env` des Hosts.
 
 Der Vertrag ist in `tests/test_deployment_contract.py` festgeschrieben: was `app/config.py` liest, muss in `bridge/.env` stehen, im Compose-Service als Variable gesetzt sein und in der README benannt werden. Ohne `env_file` startet der Bridge zwar, lehnt aber jeden SABnzbd-Aufruf ab („Bridge API key not configured") — der Fehler fällt erst beim ersten *arr-Kontakt auf (#555).
+=======
+Die Web-Oberfläche hängt am **selben** Port unter dem Präfix `/ui`; die statischen Dateien liegen unter `/ui/static`. Es gibt keinen zweiten Port.
+
+### Drei Konfigurationsquellen, ein Vorrang
+
+```
+Settings-Datei  >  Umgebungsvariable  >  Default
+```
+
+- **Default** — die Felddefaults in `app/config.py`.
+- **Umgebung** — `bridge/.env` (lokal) bzw. die Container-Umgebung. `ENV_SOURCES` in `app/config.py` ist die einzige Stelle, die Feldnamen, Env-Namen und Defaults zusammenführt; `LOG_LEVEL` heißt in der Umgebung `BRIDGE_LOG_LEVEL`, die Namen dürfen nicht vereinheitlicht werden.
+- **Settings-Datei** — `app/settings.py`, standardmäßig `<DDLNZB_DATA_DIR>/settings.json`. Wird ausschließlich über die Web-Oberfläche geschrieben, gilt sofort (ohne Neustart) und **gewinnt gegen die Umgebung**.
+
+⚠️ **Der Vorrag ist eine bewusste Entscheidung und überraschend:** ein in der Oberfläche gespeicherter Wert überschreibt eine Umgebungsvariable. Wer einen Wert dauerhaft festnageln will, muss ihn dort setzen und die Oberfläche danach nicht mehr ändern. Der API-Key ist die einzige Ausnahme mit praktischem Nutzen — er wird fast immer zuerst in der Oberfläche gesetzt.
+
+Die Datei enthält die Secrets im Klartext (Modus `0600`). Das entspricht der Entscheidung, `.env`-Dateien bewusst im Repo zu versionieren: der Bridge läuft lokal auf dem Betreiber-Host.
+
+⚠️ **Der Pfad muss gemountet sein.** Ohne Volume auf `DDLNZB_DATA_DIR` (`/app/data` im Image) ist die Konfiguration nach jedem Container-Wechsel weg — der Bridge fällt dann auf die Umgebung zurück. `docker-compose.prod.yml` mountet dafür `bridge_data`.
+
+### Die Web-Oberfläche `/ui`
+
+`app/webui.py` liefert die Seiten, `app/webui_templates.py` das Markup, `app/static/` CSS und JS. Es gibt **keine** Template-Engine und keine neue Dependency — das HTML wird in Python gebaut, die Formulare werden aus dem Roh-Body gelesen (`python-multipart` bleibt bewusst außen vor, so wie es `mode=addfile` im SABnzbd-Dispatcher auch ohne auskommt).
+
+Drei Zustände, alle unter demselben Pfad:
+
+| Zustand | Bedingung | Seite |
+| --- | --- | --- |
+| Ersteinrichtung | `DDLNZB_API_KEY` ist leer | Setup-Formular mit Token-Pflicht |
+| Anmeldung | Key gesetzt, keine Session | Login-Formular |
+| Dashboard | Session gültig | Konfiguration + Status |
+
+Auth: Session-Cookie (`HttpOnly`, `SameSite=Strict`, `Path=/ui`) mit einer HMAC-Ableitung des Keys — der Key selbst liegt **nicht** im Cookie. `SameSite=Strict` ist zugleich der CSRF-Schutz. Maschinenclients kommen über `X-API-Key` oder `?apikey=` herein.
+
+Der **Setup-Token** schützt die Ersteinrichtung: ohne Key wäre der Bridge sonst aus dem LAN übernehmbar. Er wird beim Start erzeugt und im Log ausgegeben (`docker logs ddlnzb-bridge | grep "Setup-Token"`), ist pro Prozess einmalig und wird nach der Nutzung verworfen. `DDLNZB_SETUP_TOKEN` überschreibt ihn.
+
+⚠️ **Die API-URL ist kein Eingabefeld.** Sie bringt der Bridge mit (Default `https://api.petsground.de`) und ist nur per `DDLNZB_API_URL` überschreibbar. Ein Klick in der Oberfläche darf den Bridge nicht auf einen beliebigen Host umbiegen — deshalb steht sie in `settings.FIELD_TYPES` nicht drin.
+
+Die Oberfläche ist im Stil der DDLnzb-Website gehalten: die Farbtokens stammen aus `frontend/src/app/globals.css`, die Website selbst ist immer hell (kein Theme-Toggle). Änderungen an den Farbwerten dort sind hier nachzuziehen.
+>>>>>>> origin/main
 
 ## Work Guidance
 
@@ -86,6 +129,7 @@ Der Vertrag ist in `tests/test_deployment_contract.py` festgeschrieben: was `app
 - `myjdapi` ist ein **synchroner** Client. Die Bridge kapselt ihn mit `asyncio.to_thread`. Jede neue JDownloader-Methode muss in diesem Muster bleiben, sonst blockiert der Event-Loop.
 - `CATEGORY_MAPPING` ist in `BridgeConfig.__post_init__` verdrahtet. Der Kommentar in `.env.example`, der einen JSON-String-Override beschreibt, ist **nicht implementiert** — der Beispielwert täuscht.
 - Zwei Persistenzmechanismen laufen parallel: `sabnzbd_api._persist_state()` schreibt die komplette Queue+History in `STATE_PATH`, `persistence.QueuePersistence` schreibt nur die Queue nach `DATA_DIR/queue.json` (mit atomarem Schreiben via `.tmp` + `replace()`). Beide werden im Lifespan unabhängig genutzt.
+- Der State-Datei führt die Größe in **Bytes** (`size_bytes`, `sizeleft_bytes`), nicht als Text. Ältere Dateien mit `size`/`sizeleft` werden beim Laden über `_bytes_aus_groessen_text()` umgerechnet. Unbekannte Felder in der Datei werden verworfen (`_bekannte_felder()`) — sonst verschluckt `_load_state()` den Fehler und die Queue ist nach dem Neustart **stillschweigend leer**.
 
 ## Verification
 
@@ -94,13 +138,19 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
+<<<<<<< HEAD
 ⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 8 Testdateien mit 49 Testfunktionen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und der **Deployment-Vertrag** (`tests/test_deployment_contract.py`: Compose-Service, `bridge/.env` und `README.md` gegen `app/config.py` — #555, #671).
+=======
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 9 Testdateien mit 74 Testfunktionen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und die Web-Oberfläche (`tests/test_webui.py`: Ersteinrichtung mit Setup-Token, Anmeldung und Session, Speichern der Konfiguration, Reset, Schutz der Geheimnisse, dazu die SABnzbd-Kompatibilität (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, Größe in Zahlen, Status-Vokabular)).
+>>>>>>> origin/main
 
 Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
 `tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
 
 ⚠️ **Nicht jeden Test darf `fresh_import()` benutzen.** `download_handler._monitor_jdownloader()` greift über eine Modul-Referenz auf `download_queue` zu. `fresh_import()` erzeugt ein neues Dict, das der Handler nicht sieht — der Eintrag fehlt, die Schleife kehrt sofort zurück und der Test wäre stillschweigend grün. Solche Tests befüllen `app.sabnzbd_api.download_queue` direkt und prüfen anschließend, dass `get_packages` wirklich aufgerufen wurde.
+
+⚠️ **Wer über die HTTP-API testet, darf `app.sabnzbd_api` nicht erst zur Testzeit importieren.** `fresh_import()` entfernt das Modul aus `sys.modules` und importiert es neu — der Router in `app.main` hält aber die **alte** Modulinstanz. Ein `import app.sabnzbd_api` **innerhalb** der Testfunktion liefert danach ein anderes Modul: der Test befüllt eine Queue, die der Router nicht sieht, und die Antworten kommen leer zurück. Der Import gehört deshalb auf **Modulebene** der Testdatei — dann bindet er die Instanz, die auch `app.main` benutzt. Betroffen ist jeder Test, der über `/api` geht (`tests/test_sabnzbd_compat.py`).
 
 Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absolut als `from app.…` importiert werden. **Dabei `python -m pytest` verwenden, nicht das `pytest`-Skript.** Das Skript legt das aktuelle Verzeichnis nicht auf `sys.path`; legt es eine alte Installation hinein (z. B. eine `.pth`-Datei eines früheren `poetry install` auf ein fremdes Verzeichnis), importiert pytest `app.*` von dort statt aus dem Working Tree. Das trifft Tests stillschweigend falsch — sie laufen gegen einen anderen Stand und schlagen dann für Gründe fehl, die im Working Tree nicht existieren. Gegenprobe bei Verdacht:
 
