@@ -1,0 +1,26 @@
+# Credentials and local state - never commit
+.env
+.env.local
+*.env
+!.env.example
+
+# Bridge runtime state (download queue and history)
+ddlnzb_bridge_state.json
+*.state.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
