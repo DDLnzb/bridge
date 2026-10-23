@@ -16,6 +16,28 @@ Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
 - `.env`, `.env.example`
 - `docs/` — Screenshots der Web-Oberfläche (nur Bilddateien, keine Dokumentation)
 
+### Der Code wird nach `DDLnzb/bridge` gespiegelt
+
+`bridge/` ist die Quelle der Wahrheit. Der Inhalt wandert per CI in das **public** Repo
+`DDLnzb/bridge` (Job `sync-bridge-public` in `.github/workflows/ci.yml`, ausgeführt über
+`scripts/sync-bridge-public.sh`). Dort baut die eigene CI des public Repo das Image
+`ghcr.io/ddlnzb/bridge` (linux/amd64 + linux/arm64).
+
+Konsequenzen für Änderungen hier:
+
+- **`.env` darf nicht in den Spiegel.** Die Datei enthält echte Zugangsdaten
+  (`MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY`) und ist im public Repo weder
+  versioniert noch im History enthalten — der Sync filtert sie aus *jeder* Commit.
+  Wer hier eine Zugangsdatei braucht, legt sie als `.env.example` an.
+- **`tests/test_deployment_contract.py` läuft nur im Monorepo.** Er prüft den
+  Monorepo-Vertrag (`docker-compose.prod.yml`, `bridge/.env`) und überspringt im
+  public Repo, wo dieser Gegenstand nicht existiert.
+- **Änderungen an `bridge/` erzeugen einen Sync.** Wer sie vor dem Merge im public Repo
+  sehen will, muss den Sync-Job abwarten — der Push ins public Repo erfolgt erst danach.
+
+Details und die verifizierten Eigenschaften (Determinismus, Fast-Forward-Kette) stehen in
+[`plan/docs/bridge_public_overlay.md`](../plan/docs/bridge_public_overlay.md).
+
 ## Local Contracts
 
 ### `app/` und `src/` sind zwei verschiedene Systeme
