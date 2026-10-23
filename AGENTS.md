@@ -12,7 +12,7 @@ Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
 
 - `app/` — produktive Implementierung (FastAPI, SABnzbd-API, JDownloader-Anbindung)
 - `src/` — Stub/Parallelimplementierung, siehe unten
-- `Dockerfile`, `pyproject.toml`, `README.md`
+- `Dockerfile`, `pyproject.toml`, `README.md` — die README dokumentiert den Configvertrag von `app/`; der `src/`-Stub hat einen eigenen, den kein laufender Prozess liest
 - `.env`, `.env.example`
 - `docs/` — Screenshots der Web-Oberfläche (nur Bilddateien, keine Dokumentation)
 
@@ -68,42 +68,6 @@ Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` ver�
 
 Die Web-Oberfläche hängt am **selben** Port unter dem Präfix `/ui`; die statischen Dateien liegen unter `/ui/static`. Es gibt keinen zweiten Port.
 
-### Drei Konfigurationsquellen, ein Vorrang
-
-```
-Settings-Datei  >  Umgebungsvariable  >  Default
-```
-
-- **Default** — die Felddefaults in `app/config.py`.
-- **Umgebung** — `bridge/.env` (lokal) bzw. die Container-Umgebung. `ENV_SOURCES` in `app/config.py` ist die einzige Stelle, die Feldnamen, Env-Namen und Defaults zusammenführt; `LOG_LEVEL` heißt in der Umgebung `BRIDGE_LOG_LEVEL`, die Namen dürfen nicht vereinheitlicht werden.
-- **Settings-Datei** — `app/settings.py`, standardmäßig `<DDLNZB_DATA_DIR>/settings.json`. Wird ausschließlich über die Web-Oberfläche geschrieben, gilt sofort (ohne Neustart) und **gewinnt gegen die Umgebung**.
-
-⚠️ **Der Vorrag ist eine bewusste Entscheidung und überraschend:** ein in der Oberfläche gespeicherter Wert überschreibt eine Umgebungsvariable. Wer einen Wert dauerhaft festnageln will, muss ihn dort setzen und die Oberfläche danach nicht mehr ändern. Der API-Key ist die einzige Ausnahme mit praktischem Nutzen — er wird fast immer zuerst in der Oberfläche gesetzt.
-
-Die Datei enthält die Secrets im Klartext (Modus `0600`). Das entspricht der Entscheidung, `.env`-Dateien bewusst im Repo zu versionieren: der Bridge läuft lokal auf dem Betreiber-Host.
-
-⚠️ **Der Pfad muss gemountet sein.** Ohne Volume auf `DDLNZB_DATA_DIR` (`/app/data` im Image) ist die Konfiguration nach jedem Container-Wechsel weg — der Bridge fällt dann auf die Umgebung zurück. `docker-compose.prod.yml` mountet dafür `bridge_data`.
-
-### Die Web-Oberfläche `/ui`
-
-`app/webui.py` liefert die Seiten, `app/webui_templates.py` das Markup, `app/static/` CSS und JS. Es gibt **keine** Template-Engine und keine neue Dependency — das HTML wird in Python gebaut, die Formulare werden aus dem Roh-Body gelesen (`python-multipart` bleibt bewusst außen vor, so wie es `mode=addfile` im SABnzbd-Dispatcher auch ohne auskommt).
-
-Drei Zustände, alle unter demselben Pfad:
-
-| Zustand | Bedingung | Seite |
-| --- | --- | --- |
-| Ersteinrichtung | `DDLNZB_API_KEY` ist leer | Setup-Formular mit Token-Pflicht |
-| Anmeldung | Key gesetzt, keine Session | Login-Formular |
-| Dashboard | Session gültig | Konfiguration + Status |
-
-Auth: Session-Cookie (`HttpOnly`, `SameSite=Strict`, `Path=/ui`) mit einer HMAC-Ableitung des Keys — der Key selbst liegt **nicht** im Cookie. `SameSite=Strict` ist zugleich der CSRF-Schutz. Maschinenclients kommen über `X-API-Key` oder `?apikey=` herein.
-
-Der **Setup-Token** schützt die Ersteinrichtung: ohne Key wäre der Bridge sonst aus dem LAN übernehmbar. Er wird beim Start erzeugt und im Log ausgegeben (`docker logs ddlnzb-bridge | grep "Setup-Token"`), ist pro Prozess einmalig und wird nach der Nutzung verworfen. `DDLNZB_SETUP_TOKEN` überschreibt ihn.
-
-⚠️ **Die API-URL ist kein Eingabefeld.** Sie bringt der Bridge mit (Default `https://api.petsground.de`) und ist nur per `DDLNZB_API_URL` überschreibbar. Ein Klick in der Oberfläche darf den Bridge nicht auf einen beliebigen Host umbiegen — deshalb steht sie in `settings.FIELD_TYPES` nicht drin.
-
-Die Oberfläche ist im Stil der DDLnzb-Website gehalten: die Farbtokens stammen aus `frontend/src/app/globals.css`, die Website selbst ist immer hell (kein Theme-Toggle). Änderungen an den Farbwerten dort sind hier nachzuziehen.
-
 ## Work Guidance
 
 - Alle `app/`-Module importieren absolut als `from app.…`. Start daher nur aus `bridge/`-Wurzel oder mit `PYTHONPATH=bridge`. CI nutzt `working-directory: bridge`.
@@ -119,7 +83,7 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 8 Testdateien mit 70 Testfunktionen (Stand 2026-10-23). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und die Web-Oberfläche (`tests/test_webui.py`: Ersteinrichtung mit Setup-Token, Anmeldung und Session, Speichern der Konfiguration, Reset, Schutz der Geheimnisse, dazu die SABnzbd-Kompatibilität (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, Größe in Zahlen, Status-Vokabular)).
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 10 Testdateien mit 74 Testfunktionen und 92 Testfaellen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und die Web-Oberfläche (`tests/test_webui.py`: Ersteinrichtung mit Setup-Token, Anmeldung und Session, Speichern der Konfiguration, Reset, Schutz der Geheimnisse, dazu die SABnzbd-Kompatibilität (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, Größe in Zahlen, Status-Vokabular)).
 
 Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
