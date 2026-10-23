@@ -36,7 +36,12 @@ ENV_FILE = BRIDGE_DIR / ".env"
 #: Repo-Root, es gibt keine Compose-Datei und keine versionierten
 #: Zugangsdaten. Die Pruefungen laufen deshalb nur im Monorepo, wo ihr
 #: Gegenstand liegt.
-if not BRIDGE_DIR.is_dir():
+#:
+#: Der Wächter hängt an genau den Dateien, die die Tests lesen. Ein Check auf
+#: das Verzeichnis `bridge/` allein trügt: das public Repo heisst selbst
+#: "bridge", sodass `BRIDGE_DIR` dort auf das Repo-Root zeigt und der
+#: Verzeichnis-Check faelschlich gruen bleibt.
+if not (COMPOSE_FILE.is_file() and ENV_FILE.is_file()):
     pytest.skip(
         "Monorepo-Vertrag (docker-compose.prod.yml, bridge/.env) - "
         "im public Repo nicht vorhanden",
