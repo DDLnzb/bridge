@@ -112,6 +112,69 @@ Zwei Eigenschaften stecken bewusst darin:
 
 `mode=retry` weist Einträge mit `status == "Completed"` ab: das Paket existiert im JDownloader-Entpackungsordner nicht mehr.
 
+### `status` trägt nur das SABnzbd-Vokabular, der Text steht in `message`
+
+`status` jedes Queue- und History-Slots ist ein Wert aus `SAB_STATUSES` — die
+Menge aus Sonarrs `SabnzbdDownloadStatus`
+(`src/NzbDrone.Core/Download/Clients/Sabnzbd/SabnzbdDownloadStatus.cs`).
+
+**Newtonsoft bricht beim Deserialisieren die gesamte Queue- bzw.
+History-Antwort ab, sobald ein Slot einen fremden Wert trägt** — nicht nur den
+einen Eintrag. Der Download-Client ist dann für die *arr-App komplett tot
+(#659).** Bis zum 23.10.2026 trug der Slot freie Texte wie
+`"Fetching links..."` oder `"Failed: Hoster down"`.
+
+Daraus folgt die Arbeitsteilung:
+
+- `status` — **nur** ein Wert aus `SAB_STATUSES`.
+- `message` (Queue) bzw. `fail_message` (History) — der ausführliche Text.
+- `_sab_status(text)` übersetzt die Freitexte des Download-Handlers
+  (`_STATUS_TEXT_MAP`). Unbekannte Texte landen in `Downloading` und werden
+  geloggt; der Originaltext geht nicht verloren, er steht in `message`.
+
+**"Starting download..." darf nicht zu "Queued" werden.** Der Download-Handler
+nimmt nur Einträge mit Status `Queued` an — ein `Queued` an dieser Stelle
+würde den Eintrag sofort wieder aufnehmen.
+
+### Die Größe wird in Bytes geführt, nicht als Text
+
+`QueueItem.size_bytes` / `sizeleft_bytes` und `HistoryItem.size_bytes` sind die
+**einzige** Quelle. `size`, `sizeleft`, `mb`, `mbleft` und `bytes` werden daraus
+abgeleitet.
+
+Sonarr/Radarr rechnen `TotalSize = mb * 1024 * 1024` (Queue) und lesen die
+History-Größe aus `bytes`. Ohne diese Felder zeigen sie jede Datei als 0 MB
+(#658). Zwei getrennt geführte Werte (Text **und** Bytes) sind der Grund, warum
+`sizeleft` dauerhaft auf dem Startwert stehen blieb: es gab keinen Ort, an dem
+die Restgröße fortgeschrieben wurde.
+
+`set_item_size()` und `_set_sizeleft()` sind die einzigen Stellen, die die
+Größe verändern. `_set_sizeleft()` nimmt die echten Byte-Zahlen aus
+JDownloader (`bytes_loaded`/`bytes_total`); sind sie nicht bekannt, wird die
+Restgröße aus dem Fortschritt abgeleitet.
+
+### Die nzo_id kommt im Parameter `value`, gelöscht wird mit `name=delete`
+
+Sonarr/Radarr sprechen den Dispatch so an:
+
+| Aufruf | Wirkung |
+| --- | --- |
+| `mode=queue&name=delete&value=<nzo_id>` | Eintrag aus der Queue entfernen |
+| `mode=history&name=delete&value=<nzo_id>` | Eintrag aus der History entfernen |
+| `mode=delete&value=<nzo_id>` | Eintrag aus der Queue entfernen |
+| `mode=retry&value=<nzo_id>` | fehlgeschlagenen Download wieder einreihen |
+
+`value` ist der SABnzbd-Standardname; `nzo_id` bleibt als bridge-native Form
+unterstützt. **Ohne `value` kennt die Bridge die nzo_id nicht** — bis zum
+23.10.2026 war `value` nicht deklariert, ein `name=delete` lief ins Leere (#657).
+
+Zwei Fallen:
+
+- `mode=queue` **ohne** `name=delete` bleibt das Listing. Ein leeres `name` darf
+  die Queue nicht leeren.
+- `mode=delete` kennt nur die **Queue**. Ein Historieneintrag wird über
+  `mode=history&name=delete` gelöscht.
+
 ### CORS ist unsicher konfiguriert
 
 `main.py` setzt `allow_origins=["*"]` **zusammen mit** `allow_credentials=True`. Diese Kombination ist unsicher. Der Bridge lauscht standardmäßig auf `127.0.0.1`, im Docker-Image aber auf `0.0.0.0`.
