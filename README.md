@@ -1,6 +1,17 @@
 # DDLnzb Bridge
 
-Lokaler Dienst, der sich gegenüber Radarr/Sonarr/Lidarr/LazyLibrarian als **SABnzbd-kompatibler Download-Client** ausgibt. Er spricht kein Usenet-Protokoll und lädt keine NZBs herunter.
+Lokaler Dienst, der sich als **SABnzbd-kompatibler Download-Client** gegenüber
+Radarr/Sonarr/Lidarr/LazyLibrarian ausgibt. Er nimmt Fake-NZBs entgegen, holt
+die echten Links von der DDLnzb-API und reicht sie an My JDownloader weiter.
+
+Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
+
+## Features
+
+- SABnzbd-kompatible API auf Port 6789
+- JDownloader-Anbindung über die My-JDownloader-API
+- Web-Oberfläche `/ui` zur Einrichtung und Konfiguration
+- Prometheus-Metriken unter `/metrics` (geschützt)
 
 ## Funktionsweise
 
@@ -22,15 +33,37 @@ docker run -d \
   --name ddlnzb-bridge \
   -p 6789:6789 \
   -e DDLNZB_API_URL=https://api.petsground.de \
-  -e DDLNZB_API_KEY=your-portal-api-key \
+  -e DDLNZB_API_KEY=your-api-key \
   -e MYJD_EMAIL=your-jdownloader-email \
   -e MYJD_PASSWORD=your-jdownloader-password \
   -e MYJD_DEVICE_NAME=your-device-name \
-  -v /pfad/zum/downloads:/downloads \
+  -v /path/to/downloads:/downloads \
+  -v /path/to/data:/app/data \
   ghcr.io/weedo078/ddlnzb-bridge:latest
 ```
 
+Die Web-Oberfläche ist danach unter `http://<host>:6789/ui` erreichbar.
+
 `DDLNZB_API_KEY` und `DDLNZB_API_URL` dürfen nicht leer sein: ohne Key lehnt die Bridge **jeden** SABnzbd-Aufruf ab (`Bridge API key not configured`), ohne API-URL erreicht sie die API nicht.
+## Web-Oberfläche
+
+`http://<host>:6789/ui` erlaubt die vollständige Konfiguration des Bridge:
+API-Key, JDownloader-Zugang, Download-Zielordner, Log-Stufe. Dazu kommen
+Verbindungstests und der aktuelle Betriebszustand (API, JDownloader, Queue).
+
+**Ersteinrichtung.** Solange kein `DDLNZB_API_KEY` gesetzt ist, zeigt `/ui`
+das Setup-Formular. Es verlangt den **Setup-Token**, der beim Start im
+Container-Log steht:
+
+```bash
+docker logs ddlnzb-bridge | grep "Setup-Token"
+```
+
+Ohne diesen Token kann niemand den Bridge übernehmen — auch nicht aus dem LAN.
+Alternativ lässt sich der Token per `DDLNZB_SETUP_TOKEN` vorgeben.
+
+**Anmeldung.** Danach genügt der `DDLNZB_API_KEY` als Passwort. Er wird nicht
+gespeichert, sondern als Session-Cookie (HttpOnly, SameSite=Strict) abgelegt.
 
 ## Betrieb mit Compose
 
@@ -42,6 +75,37 @@ docker compose up -d bridge
 
 Der Service bindet standardmäßig auf `0.0.0.0:6789`. Wer ihn nur lokal braucht, setzt `BRIDGE_BIND=127.0.0.1` in der `.env` des Hosts.
 
+## Konfiguration
+
+| Variable | Beschreibung | Erforderlich |
+|----------|--------------|--------------|
+| `DDLNZB_API_URL` | DDLnzb-API-URL. Default `https://api.petsground.de`; im Compose-Netzwerk `http://api:8000` | Nein |
+| `DDLNZB_API_KEY` | API-Key aus dem Portal. **Pflicht** — ohne Key lehnt der Bridge jeden Aufruf ab | Ja |
+| `MYJD_EMAIL` | My-JDownloader-E-Mail | Für Downloads |
+| `MYJD_PASSWORD` | My-JDownloader-Passwort | Für Downloads |
+| `MYJD_DEVICE_NAME` | Gerätename in `my.jdownloader.org` (exakt) | Für Downloads |
+| `MYJD_APP_KEY` | App-Key, Default `DDLnzb` | Nein |
+| `DOWNLOAD_DIR` | Zielordner für die Downloads | Nein |
+| `EXTRACT_ARCHIVES` | Archive entpacken (Default `true`) | Nein |
+| `DELETE_ARCHIVES` | Archive nach dem Entpacken löschen (Default `true`) | Nein |
+| `BRIDGE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (Default `INFO`) | Nein |
+| `DDLNZB_DATA_DIR` | Ablage der Queue und der Settings-Datei | Nein |
+| `DDLNZB_SETTINGS_FILE` | Pfad der Settings-Datei, Default `<DDLNZB_DATA_DIR>/settings.json` | Nein |
+| `DDLNZB_STATE_FILE` | Pfad der State-Datei (Queue + Historie) | Nein |
+| `DDLNZB_SETUP_TOKEN` | Setup-Token für die Ersteinrichtung statt des Log-Eintrags | Nein |
+
+### Vorrag der Konfigurationsquellen
+
+```
+Settings-Datei  >  Umgebungsvariable  >  Default
+```
+
+Die Web-Oberfläche schreibt in die Settings-Datei (`DDLNZB_DATA_DIR`). Was dort
+steht, gilt sofort — ohne Neustart — und gewinnt gegen die Umgebungsvariable.
+Wer einen Wert dauerhaft über die Umgebung festlegen will, muss ihn dort
+setzen **und** die Oberfläche danach nicht mehr ändern.
+
+`BRIDGE_HOST` / `BRIDGE_PORT` gelten nur für lokale Läufe (Default `127.0.0.1:8080`). Im Container startet das Image uvicorn per `CMD` mit `--host 0.0.0.0 --port 6789` — der SABnzbd-Port ist deshalb immer **6789**.
 ## Konfiguration in Radarr/Sonarr
 
 Radarr braucht **zwei** Einträge: einen Indexer für die Suche und einen Download-Client für die Übergabe.
@@ -106,7 +170,9 @@ Die Bridge bildet die SABnzbd-Kategorie auf einen JDownloader-Ordner ab. Der Nam
 
 ## Lokale Entwicklung
 
-Beim lokalen Start außerhalb von Docker lädt die Anwendung automatisch die Datei `bridge/.env`. Lege dort alle benötigten Schlüssel ab (siehe Tabelle oben) und starte anschließend zum Beispiel mit `poetry run uvicorn app.main:app --reload`. Weitere Schritte sind nicht nötig – die Variablen stehen sofort zur Verfügung.
+Beim lokalen Start außerhalb von Docker lädt die Anwendung automatisch die
+Datei `bridge/.env`. Lege dort alle benötigten Schlüssel ab und starte
+anschließend:
 
 ```bash
 cd bridge
@@ -114,4 +180,4 @@ poetry install
 poetry run uvicorn app.main:app --reload
 ```
 
-`/health` ist bewusst ohne Auth erreichbar (Docker-HEALTHCHECK). Alle anderen Routen verlangen den Key per `X-API-Key`, `apikey`-Query-Param oder `Authorization: Bearer`.
+Weitere Schritte sind nicht nötig – die Variablen stehen sofort zur Verfügung.
