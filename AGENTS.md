@@ -77,7 +77,9 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Für alles andere — JDownloader-Verbindung, Heartbeat, `queue_persistence` — gibt es weiterhin keine Tests. Die CI-Jobs für den Bridge führen nur Lint aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 7 Testdateien mit 42 Testfunktionen (Stand 2026-10-19). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore und die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung).
+
+Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
 
 `tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
 
@@ -92,6 +94,8 @@ python -c "import app.sabnzbd_api as m; print(m.__file__)"
 Der Pfad muss im Working Tree liegen.
 
 `pyproject.toml` und `poetry.lock` sind die einzige Abhängigkeitsquelle der Bridge. Ein `requirements.txt` gab es bis 2026-10-19, wurde von keinem Build-Pfad gelesen und wich vom Lockfile ab; es ist entfernt. **Keine zweite Deklaration anlegen** — Dependabot würde beide scannen und doppelte PRs erzeugen, von denen nur einer die installierte Version ändert.
+
+`prometheus-client` (>=0.24.1,<0.27.0) ist seit PR #210 eine Bridge-Abhängigkeit: `app/metrics.py` exportiert `ddlnzb_bridge_*`, und der Monitoring-Stack scrapt den Bridge über `GET /metrics`.
 
 ## Child DOX Index
 
