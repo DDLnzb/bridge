@@ -45,6 +45,19 @@ docker run -d \
 Die Web-Oberfläche ist danach unter `http://<host>:6789/ui` erreichbar.
 
 `DDLNZB_API_KEY` und `DDLNZB_API_URL` dürfen nicht leer sein: ohne Key lehnt die Bridge **jeden** SABnzbd-Aufruf ab (`Bridge API key not configured`), ohne API-URL erreicht sie die API nicht.
+
+### Image-Architekturen
+
+Das Image ist **Multi-Arch** und trägt beide Plattformen im selben Tag:
+
+| Plattform | Host |
+| --- | --- |
+| `linux/amd64` | x86_64 — der Unraid-Produktionshost |
+| `linux/arm64` | ARM64 — der Dev-Host `ddlnzb-dev` |
+
+Ein `docker pull ghcr.io/weedo078/ddlnzb-bridge:latest` wählt die passende Variante selbst; ein expliziter `IMAGE_TAG` funktioniert genauso, weil er auf dasselbe Manifest zeigt. Fehlt eine Variante, schlägt der Pull mit `no matching manifest for linux/<arch>` fehl.
+
+> **Nur die Bridge ist mehrarchitekturfähig.** Die Images `ddlnzb-api` und `ddlnzb-web` werden ausschließlich für `linux/arm64` gebaut. Wer den kompletten Stack auf einem x86_64-Host betreiben will, braucht für diese beiden Images noch eine amd64-Variante.
 ## Web-Oberfläche
 
 `http://<host>:6789/ui` erlaubt die vollständige Konfiguration des Bridge:
