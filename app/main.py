@@ -8,12 +8,15 @@ import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from app import webui
 from app.config import config
 from app.download_handler import download_handler
 from app.heartbeat import jd_heartbeat
@@ -28,6 +31,7 @@ from app.metrics import (
 from app.persistence import queue_persistence
 from app.sabnzbd_api import QueueItem, download_queue
 from app.sabnzbd_api import router as sabnzbd_router
+from app.webui import router as webui_router
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -50,14 +54,17 @@ async def lifespan(app: FastAPI):
             response = await client.get(f"{config.DDLNZB_API_URL}/health")
         if response.status_code == 200:
             logger.info("DDLnzb API reachable: %s", config.DDLNZB_API_URL)
+            webui.record_test("api", True, f"HTTP {response.status_code}")
         else:
             logger.error(
                 "DDLnzb API unreachable (status %s): %s",
                 response.status_code,
                 config.DDLNZB_API_URL,
             )
+            webui.record_test("api", False, f"HTTP {response.status_code}")
     except Exception as exc:
         logger.error("DDLnzb API connection failed: %s (%s)", config.DDLNZB_API_URL, exc)
+        webui.record_test("api", False, str(exc))
 
     # Connect to JDownloader if credentials are configured
     if config.MYJD_EMAIL and config.MYJD_PASSWORD:
@@ -72,6 +79,11 @@ async def lifespan(app: FastAPI):
             print(f"Failed to connect to JDownloader: {e}")
     else:
         print("JDownloader credentials not configured")
+
+    # Ohne API-Key ist der Bridge funktional unbrauchbar - dann braucht es den
+    # Setup-Token fuer die Ersteinrichtung ueber /ui. Das Token steht im Log.
+    if not config.DDLNZB_API_KEY:
+        webui.setup_token()
 
     # Load persisted queue
     try:
@@ -200,6 +212,17 @@ async def prometheus_metrics(request: Request, call_next):
 
 # Include SABnzbd-compatible API
 app.include_router(sabnzbd_router)
+
+# Web-Oberflaeche fuer die Einrichtung (siehe app/webui.py)
+app.include_router(webui_router)
+
+# Statische Dateien der Oberflaeche (CSS/JS). Der Mount muss unter /ui liegen,
+# weil die Routen dort mit Prefix /ui registriert sind.
+app.mount(
+    "/ui/static",
+    StaticFiles(directory=str(Path(__file__).parent / "static")),
+    name="ui-static",
+)
 
 
 async def require_bridge_key(
