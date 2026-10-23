@@ -192,9 +192,11 @@ jobs:
   # ===========================
   # Sichtbarkeit pruefen
   # ===========================
-  # Der GITHUB_TOKEN kann die Package-Sichtbarkeit nicht auf "public" stellen.
-  # Dieser Job sagt Bescheid, solange das Image nicht anonym pullbar ist - so
-  # faellt der Zustand auf, statt still zu bleiben.
+  # Der GITHUB_TOKEN kann die Package-Sichtbarkeit nicht auf "public" stellen -
+  # die Aenderung braucht einen Token mit `write:packages` und `admin:org`.
+  # Der Job warnt, solange das Image nicht anonym pullbar ist, und laesst den
+  # Build trotzdem gruen: die Sichtbarkeit ist eine Einmal-Aktion des
+  # Betreibers, kein Build-Fehler.
   check-visibility:
     name: Package-Sichtbarkeit pruefen
     runs-on: ubuntu-latest
@@ -213,4 +215,5 @@ jobs:
           echo "::notice::Package ${name} hat die Sichtbarkeit '${visibility}'"
           if [ "$visibility" != "public" ]; then
             echo "::warning::Das Image ist noch nicht anonym pullbar. Einmalig von Hand umstellen: GitHub -> Organization DDLnzb -> Packages -> ${name} -> Package settings -> Change visibility -> Public"
+            echo "::warning::Bis dahin schlaegt 'docker pull ghcr.io/ddlnzb/bridge:latest' ohne Registry-Login fehl."
           fi
