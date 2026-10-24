@@ -82,10 +82,10 @@ class DownloadHandler:
                 logger.warning("Invalid payload for %s", nzo_id)
                 return
 
-            # Feld 1 des Payloads heißt im Backend `source`, enthält aber
-            # str(release.id) - also die Release-UUID, keine Portal-URL.
-            # Der frühere Local hieß `source_url` und trieb die Verwechslung
-            # in #374 an; der eindeutige Name gehört hierher.
+            # Field 1 of the payload is called `source` in the backend, but it
+            # holds str(release.id) - the release UUID, not a portal URL. The
+            # former local was named `source_url` and drove the confusion in
+            # #374; the unambiguous name belongs here.
             title, release_id, mirror, size, password, imdb_id = release_info
             if size and size > 0:
                 set_item_size(item, size)
@@ -133,8 +133,8 @@ class DownloadHandler:
                 item.links = links
                 update_progress(nzo_id, 100, "Links ready")
                 logger.info("Stored links for %s; no JDownloader configured", nzo_id)
-                # Kein JDownloader, also gibt es keinen Ablageort - der Text
-                # gehoert in das Klartextfeld, nicht in `storage` (#659).
+                # No JDownloader, so there is no storage location - the text
+                # belongs into the plain-text field, not into `storage` (#659).
                 complete_download(nzo_id, "", f"Links available ({len(links)} URLs)")
 
         except Exception as e:
@@ -174,19 +174,19 @@ class DownloadHandler:
         release_id: str | None,
         max_retries: int = 3,
     ) -> list[str]:
-        """Fetch download links from DDLnzb Cloud API with retries.
+        """Fetch download links from the DDLnzb Cloud API with retries.
 
-        `release_id` ist die Release-UUID. Das Backend kennt ausschließlich
-        `GET /api/v1/links/{release_id}` - einen `by-source`-Pfad gibt es
-        nicht, der frühere Mirror-Filter war toter Code.
+        `release_id` is the release UUID. The backend knows exactly one
+        endpoint: `GET /api/v1/links/{release_id}` - there is no `by-source`
+        path, the former mirror filter was dead code.
         """
         if not release_id:
-            logger.error("Payload enthält keine Release-ID - Cloud-Abruf übersprungen")
+            logger.error("Payload contains no release ID - cloud fetch skipped")
             return []
 
         backoff = 1
-        # Pfadsegment kodieren: die ID kommt aus einem Base64-Payload und wird
-        # ungeprüft in den Pfad interpoliert.
+        # Encode the path segment: the ID comes from a base64 payload and is
+        # interpolated into the path without validation.
         endpoint = quote(release_id, safe="")
 
         headers = {}
@@ -275,18 +275,18 @@ class DownloadHandler:
         idle_interval = 300  # 5 minutes
         deadline = asyncio.get_event_loop().time() + max_duration
 
-        # `matched` ist ein Zustand des **Monitorings**, nicht des einzelnen
-        # Poll-Aufrufs, und lebt deshalb außerhalb der Schleife.
+        # `matched` is a state of the **monitoring**, not of the single poll
+        # call, and therefore lives outside the loop.
         #
-        # Bis zum 2026-10-19 schlief der `except`-Zweig **immer** 300 s, auch
-        # während ein Download lief. Ein einzelner ausgesetzter JDownloader
-        # frozeerte die Fortschrittsanzeige für fünf Minuten und kostete den
-        # Rest der 30-Minuten-Frist (#477).
+        # Until 2026-10-19 the `except` branch always slept 300 s, even while
+        # a download was running. A single unresponsive JDownloader froze the
+        # progress display for five minutes and burned the rest of the
+        # 30-minute deadline (#477).
         #
-        # Der Zustand wird nur zurückgesetzt, wenn JDownloader **erfolgreich**
-        # geantwortet hat und das Paket darin nicht mehr enthalten war. Ein
-        # Fehler beim Abruf sagt nichts über den Paketzustand aus — das ist der
-        # Unterschied, der hier die 300 s rechtfertigt.
+        # The state is only reset when JDownloader answered **successfully**
+        # and the package was no longer contained in it. A failure during the
+        # fetch says nothing about the package state - that is the difference
+        # that justifies the 300 s here.
         matched = False
 
         while asyncio.get_event_loop().time() < deadline:
@@ -295,15 +295,15 @@ class DownloadHandler:
 
             try:
                 packages = await jdownloader.get_packages()
-                # Die Abfrage war erfolgreich: der Zustand ist jetzt bekannt.
+                # The query succeeded: the state is now known.
                 matched = False
                 for pkg in packages or []:
                     if package_name.lower() in pkg.get("name", "").lower():
                         matched = True
-                        # Calculate progress. JDownloader meldet bytesTotal = 0,
-                        # solange die Gesamtgröße des Pakets nicht feststeht -
-                        # dann bleibt der Fortschritt bei 0, statt durch Null zu
-                        # teilen und den Monitoring-Loop zu unterbrechen.
+                        # Calculate progress. JDownloader reports bytesTotal = 0
+                        # as long as the total size of the package is not known -
+                        # progress then stays at 0 instead of dividing by zero
+                        # and breaking the monitoring loop.
                         bytes_loaded = pkg.get("bytesLoaded") or 0
                         bytes_total = pkg.get("bytesTotal") or 0
                         if bytes_total > 0:
@@ -311,9 +311,10 @@ class DownloadHandler:
                         else:
                             progress = 0
 
-                        # Die echten Bytes mitgeben: daraus leitet
-                        # `update_progress` die Restgroesse (`sizeleft`) ab.
-                        # Ohne sie bliebe `sizeleft` auf dem Startwert (#658).
+                        # Pass the real bytes along: `update_progress` derives
+                        # the remaining size (`sizeleft`) from them. Without
+                        # them `sizeleft` would stay at the initial value
+                        # (#658).
                         update_progress(
                             nzo_id,
                             20 + int(progress * 0.8),
@@ -332,9 +333,9 @@ class DownloadHandler:
                 await asyncio.sleep(active_interval if matched else idle_interval)
             except Exception as e:
                 logger.warning("JDownloader monitoring error: %s", e)
-                # `matched` steht hier bewusst außerhalb des `try` — siehe die
-                # Erklärung zur Schleifenkopf. Ein Poll-Fehler bei laufendem
-                # Download darf den Warteschlaf nicht auf 300 s verlängern.
+                # `matched` deliberately sits outside the `try` - see the
+                # explanation at the loop head. A poll error during a running
+                # download must not extend the wait to 300 s.
                 await asyncio.sleep(active_interval if matched else idle_interval)
 
         # Timeout

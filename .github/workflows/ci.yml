@@ -1,25 +1,25 @@
 # =============================================================================
 # DDLnzb Bridge - CI
 # =============================================================================
-# Baut das Bridge-Image als Multi-Arch (linux/amd64 + linux/arm64) und schiebt
-# es nach ghcr.io/ddlnzb/bridge.
+# Builds the bridge image as multi-arch (linux/amd64 + linux/arm64) and pushes
+# it to ghcr.io/ddlnzb/bridge.
 #
-# Warum zwei Plattformen: die Bridge laeuft auf dem x86_64-Unraid-Produktions-
-# host und auf ARM64-Dev-Hosts. Ein arm64-only-Image laesst sich auf x86_64
-# nicht pullen ("no matching manifest").
+# Why two platforms: the bridge runs on the x86_64 Unraid production host and
+# on ARM64 dev hosts. An arm64-only image cannot be pulled on x86_64
+# ("no matching manifest").
 #
-# Der Code in diesem Repo ist ein Spiegel aus dem Monorepo. Der Sync laeuft
-# dort: .github/workflows/ci.yml (Job `sync-bridge-public`).
+# The code in this repo is a mirror from the monorepo. The sync runs
+# there: .github/workflows/ci.yml (job `sync-bridge-public`).
 #
-# Das Image wird mit dem GITHUB_TOKEN dieses Repos gepusht. Das setzt die
-# Zugriffsrechte des Pakets auf dieses Repo - das Package gehoert der
-# Organisation DDLnzb.
+# The image is pushed with the GITHUB_TOKEN of this repo. That sets the
+# access rights of the package to this repo - the package belongs to the
+# DDLnzb organization.
 #
-# WICHTIG: Die Sichtbarkeit des Packages muss EINMALIG von Hand auf "public"
-# gestellt werden (GitHub UI: Packages -> ddlnzb-bridge -> Package settings
-# -> Change visibility -> Public). Der GITHUB_TOKEN kann das nicht - die
-# Aenderung braucht einen Token mit `write:packages` und `admin:org`. Der
-# Job `check-visibility` sagt Bescheid, solange das fehlt.
+# IMPORTANT: The visibility of the package must be set to "public" ONCE by
+# hand (GitHub UI: Packages -> ddlnzb-bridge -> Package settings
+# -> Change visibility -> Public). The GITHUB_TOKEN cannot do this - the
+# change requires a token with `write:packages` and `admin:org`. The
+# job `check-visibility` reports while that is missing.
 # =============================================================================
 
 name: CI
@@ -41,10 +41,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  # Die Registry verlangt Kleinschreibung im Pfad. `github.repository` liefert
-  # die Schreibweise der Org ("DDLnzb") - daraus wird ein Tag, den buildx mit
-  # "repository name must be lowercase" ablehnt. Die Org wird darum hier
-  # kleingeschrieben gesetzt; der Repo-Name ist bereits kleingeschrieben.
+  # The registry requires lowercase in the path. `github.repository` returns
+  # the spelling of the org ("DDLnzb") - that becomes a tag which buildx
+  # rejects with "repository name must be lowercase". The org is therefore
+  # set in lowercase here; the repo name is already lowercase.
   IMAGE_NAME: ddlnzb/${{ github.event.repository.name }}
 
 jobs:
@@ -58,35 +58,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Python installieren
+      - name: Install Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Poetry installieren
+      - name: Install Poetry
         run: pip install "poetry==1.7.1"
 
-      - name: Abhaengigkeiten installieren
+      - name: Install dependencies
         run: poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root --with dev
 
-      - name: Tests laufen
-        # Die Testmodule importieren absolut als `from app.…`. Im Monorepo
-        # liefert `working-directory: bridge` das passende Root; im public Repo
-        # liegt der Code schon im Root, aber pytest setzt das Root-Verzeichnis
-        # nicht automatisch in den Importpfad. PYTHONPATH stellt das sicher.
+      - name: Run tests
+        # The test modules import absolutely as `from app.…`. In the monorepo
+        # `working-directory: bridge` provides the matching root; in the public
+        # repo the code already lives in the root, but pytest does not put the
+        # root directory on the import path automatically. PYTHONPATH ensures this.
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: poetry run pytest tests/ -v
 
   # ===========================
-  # Image bauen und publizieren
+  # Build and publish image
   # ===========================
   build:
-    name: Image bauen (${{ matrix.platform }})
-    # Zwei Jobs: einer baut arm64 nativ, der andere amd64 nativ. Das ist
-    # schneller und verlaesslicher als ein Multi-Arch-Build mit QEMU, bei dem
-    # der fremde-arch-Zweig emuliert laeuft (Poetry-Install unter Emulation
-    # kostet Minuten).
+    name: Build image (${{ matrix.platform }})
+    # Two jobs: one builds arm64 natively, the other amd64 natively. That is
+    # faster and more reliable than a multi-arch build with QEMU, where the
+    # foreign-arch branch runs emulated (the Poetry install under emulation
+    # costs minutes).
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
@@ -104,8 +104,8 @@ jobs:
         id: meta
         run: |
           echo "version=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-          # Jeder Architektur-Job pusht auf einen eigenen Tag mit Suffix. Erst
-          # wenn beide existieren, kann das Manifest-Job sie zusammenfuehren.
+          # Each architecture job pushes to its own tag with a suffix. Only
+          # once both exist can the manifest job merge them.
           echo "tag=${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA::12}-${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
@@ -118,7 +118,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Image bauen und pushen
+      - name: Build and push image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -129,16 +129,16 @@ jobs:
           tags: ${{ steps.meta.outputs.tag }}
           labels: |
             org.opencontainers.image.title=DDLnzb Bridge
-            org.opencontainers.image.description=SABnzbd-kompatible Download-Bridge fuer DDLnzb
+            org.opencontainers.image.description=SABnzbd-compatible download bridge for DDLnzb
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
 
   # ===========================
-  # Multi-Arch-Manifest
+  # Multi-arch manifest
   # ===========================
   manifest:
-    name: Manifest zusammenfuehren
+    name: Merge manifest
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [build]
@@ -153,67 +153,67 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Manifest mit beiden Plattformen pushen
+      - name: Push manifest with both platforms
         run: |
           set -euo pipefail
           version="${GITHUB_SHA::12}"
           image="${REGISTRY}/${IMAGE_NAME}"
-          # Die Architektur-Jobs pushen auf Tags mit Plattform-Suffix, damit
-          # beide Images existieren, bevor das Manifest sie zusammenfuehrt.
+          # The architecture jobs push to tags with a platform suffix, so that
+          # both images exist before the manifest merges them.
           #
-          # Wichtig: `imagetools create` ERSETZT den Ziel-Tag. Ein zweiter
-          # Aufruf auf denselben Tag wuerde das erste Manifest wieder
-          # ueberschreiben - dann enthielte das Manifest nur eine Plattform.
-          # Darum fasst ein einziger Aufruf beide Plattformen zusammen.
+          # Important: `imagetools create` REPLACES the target tag. A second
+          # invocation on the same tag would overwrite the first manifest
+          # again - the manifest would then contain only one platform.
+          # Therefore a single invocation merges both platforms.
           docker buildx imagetools create \
             --tag "${image}:${version}" \
             "${image}:${version}-amd64" \
             "${image}:${version}-arm64"
-          # `latest` zeigt auf das Manifest, nicht auf ein Einzel-Arch-Image.
+          # `latest` points to the manifest, not to a single-arch image.
           docker buildx imagetools create \
             --tag "${image}:latest" \
             "${image}:${version}"
-          echo "::notice::Manifest ${image}:${version} erstellt"
+          echo "::notice::Manifest ${image}:${version} created"
 
-      - name: Pruefe, dass beide Plattformen im Manifest stehen
+      - name: Check that both platforms are in the manifest
         run: |
           set -euo pipefail
           image="${REGISTRY}/${IMAGE_NAME}"
           out=$(docker buildx imagetools inspect "${image}:latest")
           for plat in linux/amd64 linux/arm64; do
             if ! grep -qE "Platform: +$plat" <<<"$out"; then
-              echo "::error::Manifest enthaelt $plat nicht - der Pull auf x86_64-Hosts scheitert"
+              echo "::error::Manifest does not contain $plat - the pull on x86_64 hosts fails"
               echo "$out"
               exit 1
             fi
           done
-          echo "::notice::Manifest enthaelt linux/amd64 und linux/arm64"
+          echo "::notice::Manifest contains linux/amd64 and linux/arm64"
 
   # ===========================
-  # Sichtbarkeit pruefen
+  # Check visibility
   # ===========================
-  # Der GITHUB_TOKEN kann die Package-Sichtbarkeit nicht auf "public" stellen -
-  # die Aenderung braucht einen Token mit `write:packages` und `admin:org`.
-  # Der Job warnt, solange das Image nicht anonym pullbar ist, und laesst den
-  # Build trotzdem gruen: die Sichtbarkeit ist eine Einmal-Aktion des
-  # Betreibers, kein Build-Fehler.
+  # The GITHUB_TOKEN cannot set the package visibility to "public" - the
+  # change requires a token with `write:packages` and `admin:org`.
+  # The job warns as long as the image is not anonymously pullable, and still
+  # lets the build pass: the visibility is a one-time action of the
+  # operator, not a build error.
   check-visibility:
-    name: Package-Sichtbarkeit pruefen
+    name: Check package visibility
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [manifest]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Sichtbarkeit auslesen
+      - name: Read visibility
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           name="${IMAGE_NAME##*/}"
           visibility=$(gh api "/orgs/ddlnzb/packages/container/${name}" \
-            --jq '.visibility' 2>/dev/null || echo "unbekannt")
-          echo "::notice::Package ${name} hat die Sichtbarkeit '${visibility}'"
+            --jq '.visibility' 2>/dev/null || echo "unknown")
+          echo "::notice::Package ${name} has the visibility '${visibility}'"
           if [ "$visibility" != "public" ]; then
-            echo "::warning::Das Image ist noch nicht anonym pullbar. Einmalig von Hand umstellen: GitHub -> Organization DDLnzb -> Packages -> ${name} -> Package settings -> Change visibility -> Public"
-            echo "::warning::Bis dahin schlaegt 'docker pull ghcr.io/ddlnzb/bridge:latest' ohne Registry-Login fehl."
+            echo "::warning::The image is not yet anonymously pullable. Change it once by hand: GitHub -> Organization DDLnzb -> Packages -> ${name} -> Package settings -> Change visibility -> Public"
+            echo "::warning::Until then 'docker pull ghcr.io/ddlnzb/bridge:latest' fails without a registry login."
           fi

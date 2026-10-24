@@ -1,160 +1,188 @@
 # DDLnzb Bridge
 
-Lokaler Dienst, der sich als **SABnzbd-kompatibler Download-Client** gegenüber
-Radarr/Sonarr/Lidarr/LazyLibrarian ausgibt. Er nimmt Fake-NZBs entgegen, holt
-die echten Links von der DDLnzb-API und reicht sie an My JDownloader weiter.
+A local service that presents itself to Radarr/Sonarr/Lidarr/LazyLibrarian as a
+**SABnzbd-compatible download client**. It accepts fake NZBs, fetches the real
+links from the DDLnzb API and hands them over to My JDownloader.
 
-Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
+It speaks **no** Usenet protocol and downloads **no** NZB files.
 
 ## Features
 
-- SABnzbd-kompatible API auf Port 6789
-- JDownloader-Anbindung über die My-JDownloader-API
-- Web-Oberfläche `/ui` zur Einrichtung und Konfiguration
-- Prometheus-Metriken unter `/metrics` (geschützt)
+- SABnzbd-compatible API on port 6789
+- JDownloader integration via the My JDownloader API
+- Web UI at `/ui` for setup and configuration
+- Prometheus metrics at `/metrics` (protected)
 
-## Funktionsweise
+## How it works
 
-1. Das Backend liefert dem *arr-Client eine **Fake-NZB** — eine NZB-Datei, die nur die Release-ID enthält, keine echten Segmente.
-2. Die Bridge dekodiert die Release-ID aus der NZB und holt die echten Links über `GET /api/v1/links/{release_id}` bei der DDLnzb-API.
-3. Die Bridge reicht die Links an JDownloader weiter und überwacht den Fortschritt, bis Radarr/Sonarr den fertigen Download im History-Status sieht.
+1. The DDLnzb API hands the *arr client a **fake NZB** — an NZB file that contains
+   nothing but the release ID, no real segments.
+2. The bridge decodes the release ID from the NZB and fetches the real links
+   from the DDLnzb API via `GET /api/v1/links/{release_id}`.
+3. The bridge passes the links to JDownloader and monitors the progress until
+   Radarr/Sonarr sees the finished download in the history.
 
-Die Aufrufrichtung ist einseitig: **die Bridge fragt die API, niemals umgekehrt.** Es gibt keinen Callback, keinen Webhook, kein `BRIDGE_URL`. Der Bridge-Host muss die API erreichen können.
+The direction is one-way: **the bridge asks the API, never the other way
+round.** There is no callback, no webhook, no `BRIDGE_URL`. The bridge host must
+be able to reach the API.
 
-## Voraussetzungen
+## Requirements
 
-- Ein **DDLnzb-API-Key** aus dem Portal (Profil → API Keys). Derselbe Key wird auch im Radarr-Indexer gebraucht.
-- Ein **My JDownloader**-Account mit einem registrierten Gerät. Ohne JDownloader legt die Bridge die Links nur in der Queue ab und startet keinen Download.
+- A **DDLnzb API key** from the portal (Profile → API Keys). The same key is
+  used for the Radarr indexer.
+- A **My JDownloader** account with a registered device. Without JDownloader the
+  bridge only puts the links into the queue and starts no download.
 
-## Schnellstart (Docker)
+## Quick start (Docker)
 
 ```bash
 docker run -d \
   --name ddlnzb-bridge \
   -p 6789:6789 \
-  -e DDLNZB_API_URL=https://ddlnzb.pages.dev/api/app \
-  -e DDLNZB_API_KEY=your-api-key \
-  -e MYJD_EMAIL=your-jdownloader-email \
-  -e MYJD_PASSWORD=your-jdownloader-password \
-  -e MYJD_DEVICE_NAME=your-device-name \
   -v /path/to/downloads:/downloads \
   -v /path/to/data:/app/data \
-  ghcr.io/weedo078/ddlnzb-bridge:latest
+  ghcr.io/ddlnzb/bridge:latest
 ```
 
-Die Web-Oberfläche ist danach unter `http://<host>:6789/ui` erreichbar.
+That is all that is required to start the container. **Everything else is
+configured in the web UI** at `http://<host>:6789/ui` — API key, JDownloader
+access, download target folder and log level.
 
-`DDLNZB_API_KEY` und `DDLNZB_API_URL` dürfen nicht leer sein: ohne Key lehnt die Bridge **jeden** SABnzbd-Aufruf ab (`Bridge API key not configured`), ohne API-URL erreicht sie die API nicht.
+### First-time setup
 
-### Image-Architekturen
-
-Das Image ist **Multi-Arch** und trägt beide Plattformen im selben Tag:
-
-| Plattform | Host |
-| --- | --- |
-| `linux/amd64` | x86_64 — der Unraid-Produktionshost |
-| `linux/arm64` | ARM64 — der Dev-Host `ddlnzb-dev` |
-
-Ein `docker pull ghcr.io/weedo078/ddlnzb-bridge:latest` wählt die passende Variante selbst; ein expliziter `IMAGE_TAG` funktioniert genauso, weil er auf dasselbe Manifest zeigt. Fehlt eine Variante, schlägt der Pull mit `no matching manifest for linux/<arch>` fehl.
-
-> **Nur die Bridge ist mehrarchitekturfähig.** Die Images `ddlnzb-api` und `ddlnzb-web` werden ausschließlich für `linux/arm64` gebaut. Wer den kompletten Stack auf einem x86_64-Host betreiben will, braucht für diese beiden Images noch eine amd64-Variante.
-## Web-Oberfläche
-
-`http://<host>:6789/ui` erlaubt die vollständige Konfiguration des Bridge:
-API-Key, JDownloader-Zugang, Download-Zielordner, Log-Stufe. Dazu kommen
-Verbindungstests und der aktuelle Betriebszustand (API, JDownloader, Queue).
-
-**Ersteinrichtung.** Solange kein `DDLNZB_API_KEY` gesetzt ist, zeigt `/ui`
-das Setup-Formular. Es verlangt den **Setup-Token**, der beim Start im
-Container-Log steht:
+As long as no API key is stored, `/ui` shows the setup form. It asks for the
+**setup token**, which is printed to the container log on startup:
 
 ```bash
-docker logs ddlnzb-bridge | grep "Setup-Token"
+docker logs ddlnzb-bridge
 ```
 
-Ohne diesen Token kann niemand den Bridge übernehmen — auch nicht aus dem LAN.
-Alternativ lässt sich der Token per `DDLNZB_SETUP_TOKEN` vorgeben.
+The token is the one labelled `Setup-Token` / `setup token` in that output.
 
-**Anmeldung.** Danach genügt der `DDLNZB_API_KEY` als Passwort. Er wird nicht
-gespeichert, sondern als Session-Cookie (HttpOnly, SameSite=Strict) abgelegt.
+Without this token nobody can take over the bridge — not even from the LAN. The
+token can also be set explicitly via `DDLNZB_SETUP_TOKEN`.
 
-## Betrieb mit Compose
+**Login.** After the setup is done, the DDLnzb API key is the password. It is
+not stored in plain text but kept as a session cookie (HttpOnly,
+SameSite=Strict).
 
-Der Bridge-Service ist in `docker-compose.prod.yml` enthalten. Er liest seine Zugangsdaten aus `bridge/.env` (`env_file`) und setzt `DDLNZB_API_URL=http://api:8000` — im Compose-Netz heißt die API `api`; `localhost` zeigt aus dem Container auf den Container selbst.
+### Image architectures
+
+The image is **multi-arch** and carries both platforms from the same build:
+
+| Platform | Architecture |
+| --- | --- |
+| `linux/amd64` | x86_64 |
+| `linux/arm64` | ARM64 |
+
+A `docker pull ghcr.io/ddlnzb/bridge:latest` picks the matching
+variant automatically; an explicit `IMAGE_TAG` works as well because it points
+at the same manifest. If a variant is missing, the pull fails with
+`no matching manifest for linux/<arch>`.
+
+
+## Web UI
+
+`http://<host>:6789/ui` allows the complete configuration of the bridge:
+API key, JDownloader access, download target folder, log level. On top of that
+it offers connection tests and the current operating state (API, JDownloader,
+queue).
+
+## Running with Compose
+
+When the bridge runs as part of a Docker Compose deployment, it reads its
+credentials from a `.env` file (`env_file`) and reaches the API over the
+Compose network as `http://api:8000` — inside that network the API is called
+`api`; `localhost` would point at the container itself.
 
 ```bash
 docker compose up -d bridge
 ```
 
-Der Service bindet standardmäßig auf `0.0.0.0:6789`. Wer ihn nur lokal braucht, setzt `BRIDGE_BIND=127.0.0.1` in der `.env` des Hosts.
+The service binds to `0.0.0.0:6789` by default. To keep it local, set
+`BRIDGE_BIND=127.0.0.1` in the host's `.env` file.
 
-## Konfiguration
+## Configuration
 
-| Variable | Beschreibung | Erforderlich |
-|----------|--------------|--------------|
-| `DDLNZB_API_URL` | DDLnzb-API-URL. Default `https://ddlnzb.pages.dev/api/app`; im Compose-Netzwerk `http://api:8000` | Nein |
-| `DDLNZB_API_KEY` | API-Key aus dem Portal. **Pflicht** — ohne Key lehnt der Bridge jeden Aufruf ab | Ja |
-| `MYJD_EMAIL` | My-JDownloader-E-Mail | Für Downloads |
-| `MYJD_PASSWORD` | My-JDownloader-Passwort | Für Downloads |
-| `MYJD_DEVICE_NAME` | Gerätename in `my.jdownloader.org` (exakt) | Für Downloads |
-| `MYJD_APP_KEY` | App-Key, Default `DDLnzb` | Nein |
-| `DOWNLOAD_DIR` | Zielordner für die Downloads | Nein |
-| `EXTRACT_ARCHIVES` | Archive entpacken (Default `true`) | Nein |
-| `DELETE_ARCHIVES` | Archive nach dem Entpacken löschen (Default `true`) | Nein |
-| `BRIDGE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (Default `INFO`) | Nein |
-| `DDLNZB_DATA_DIR` | Ablage der Queue und der Settings-Datei | Nein |
-| `DDLNZB_SETTINGS_FILE` | Pfad der Settings-Datei, Default `<DDLNZB_DATA_DIR>/settings.json` | Nein |
-| `DDLNZB_STATE_FILE` | Pfad der State-Datei (Queue + Historie) | Nein |
-| `DDLNZB_SETUP_TOKEN` | Setup-Token für die Ersteinrichtung statt des Log-Eintrags | Nein |
+Everything below is optional — the web UI covers all of it. The variables are
+only needed for unattended setups or to override a value permanently.
 
-### Vorrag der Konfigurationsquellen
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DDLNZB_API_URL` | Base URL of the DDLnzb API. Default `https://ddlnzb.pages.dev/api/app`; `http://api:8000` inside the Compose network | No |
+| `DDLNZB_API_KEY` | API key from the portal. The bridge rejects **every** SABnzbd call without a key | No (via web UI) |
+| `MYJD_EMAIL` | My JDownloader email | No (via web UI) |
+| `MYJD_PASSWORD` | My JDownloader password | No (via web UI) |
+| `MYJD_DEVICE_NAME` | Device name in `my.jdownloader.org` (exact match) | No (via web UI) |
+| `MYJD_APP_KEY` | App key, default `DDLnzb` | No |
+| `DOWNLOAD_DIR` | Target folder for the downloads | No |
+| `EXTRACT_ARCHIVES` | Extract archives (default `true`) | No |
+| `DELETE_ARCHIVES` | Delete archives after extraction (default `true`) | No |
+| `BRIDGE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default `INFO`) | No |
+| `DDLNZB_DATA_DIR` | Location of the queue and the settings file | No |
+| `DDLNZB_SETTINGS_FILE` | Path of the settings file, default `<DDLNZB_DATA_DIR>/settings.json` | No |
+| `DDLNZB_STATE_FILE` | Path of the state file (queue + history) | No |
+| `DDLNZB_SETUP_TOKEN` | Setup token for the initial configuration instead of the log entry | No |
+
+### Precedence of the configuration sources
 
 ```
-Settings-Datei  >  Umgebungsvariable  >  Default
+settings file  >  environment variable  >  default
 ```
 
-Die Web-Oberfläche schreibt in die Settings-Datei (`DDLNZB_DATA_DIR`). Was dort
-steht, gilt sofort — ohne Neustart — und gewinnt gegen die Umgebungsvariable.
-Wer einen Wert dauerhaft über die Umgebung festlegen will, muss ihn dort
-setzen **und** die Oberfläche danach nicht mehr ändern.
+The web UI writes to the settings file (`DDLNZB_DATA_DIR`). What is stored
+there applies immediately — without a restart — and wins over the environment
+variable. To pin a value permanently via the environment, set it there **and**
+do not change it in the UI afterwards.
 
-`BRIDGE_HOST` / `BRIDGE_PORT` gelten nur für lokale Läufe (Default `127.0.0.1:8080`). Im Container startet das Image uvicorn per `CMD` mit `--host 0.0.0.0 --port 6789` — der SABnzbd-Port ist deshalb immer **6789**.
-## Konfiguration in Radarr/Sonarr
+`BRIDGE_HOST` / `BRIDGE_PORT` only apply to local runs (default
+`127.0.0.1:8080`). In the container the image starts uvicorn via `CMD` with
+`--host 0.0.0.0 --port 6789` — the Dockerfile takes precedence. The SABnzbd
+port is therefore always **6789**.
 
-Radarr braucht **zwei** Einträge: einen Indexer für die Suche und einen Download-Client für die Übergabe.
+## Configuration in Radarr/Sonarr
 
-### 1. Indexer (Newznab) — für die Suche
+Radarr needs **two** entries: an indexer for searching and a download client
+for the handover.
+
+### 1. Indexer (Newznab) — for searching
 
 `Settings → Indexers → Add → Newznab`
 
-| Feld | Wert |
+| Field | Value |
 | --- | --- |
-| URL | `https://ddlnzb.pages.dev` — Radarr hängt den `/api`-Pfad selbst an |
-| API Key | dein DDLnzb-API-Key |
-| Categories | 2000–2060 (Default passt) |
-| API Path | `/api` (Default, nicht ändern) |
+| URL | `https://ddlnzb.pages.dev` — Radarr appends the `/api` path itself |
+| API Key | your DDLnzb API key |
+| Categories | 2000–2060 (the default fits) |
+| API Path | `/api` (default, do not change) |
 
-⚠️ Für Radarr/Sonarr gilt eine **andere** URL als für die Bridge: Die *arrs hängen den `/api`-Pfad selbst an, dort gehört `https://ddlnzb.pages.dev` **ohne** `/api` eingetragen (Radarr ergibt damit `https://ddlnzb.pages.dev/api`). Die Bridge spricht die App-API an und braucht `https://ddlnzb.pages.dev/api/app`.
+⚠️ Radarr/Sonarr use a **different** URL than the bridge: the *arr apps append
+the `/api` path themselves, so enter `https://ddlnzb.pages.dev` **without**
+`/api` (Radarr turns it into `https://ddlnzb.pages.dev/api`). The bridge talks
+to the app API and needs `https://ddlnzb.pages.dev/api/app`.
 
-### 2. Download-Client (SABnzbd) — für die Übergabe
+### 2. Download client (SABnzbd) — for the handover
 
 `Settings → Download Clients → Add → SABnzbd`
 
-| Feld | Wert |
+| Field | Value |
 | --- | --- |
-| Host | Host der Bridge — nicht `localhost`, wenn Radarr in Docker läuft (`bridge` bzw. `host.docker.internal`) |
+| Host | host of the bridge — not `localhost` when Radarr runs in Docker (`bridge` or `host.docker.internal`) |
 | Port | `6789` |
-| API Key | der Bridge-Key (`DDLNZB_API_KEY` der Bridge) |
-| Movie Category | `movies` (bzw. `tv` für Sonarr) |
-| URL Base | leer |
+| API Key | the bridge key (the bridge's `DDLNZB_API_KEY`) |
+| Movie Category | `movies` (or `tv` for Sonarr) |
+| URL Base | leave empty |
 
-Der API Key im Download-Client ist der **Bridge**-Key, nicht der Portal-Key — die Bridge prüft ihn selbst, bevor sie die API fragt.
+The API key in the download client is the **bridge** key, not the portal key —
+the bridge checks it itself before it asks the API.
 
-## Kategorien
+## Categories
 
-Die Bridge bildet die SABnzbd-Kategorie auf einen JDownloader-Ordner ab. Der Name wird an JDownloader übergeben — er muss dort als Ordner existieren, sonst landet der Download im JDownloader-Standardverzeichnis:
+The bridge maps the SABnzbd category onto a JDownloader folder. The name is
+handed over to JDownloader — it has to exist as a folder there, otherwise the
+download ends up in JDownloader's default directory:
 
-| SABnzbd-Kategorie | Zielordner |
+| SABnzbd category | Target folder |
 | --- | --- |
 | `movies`, `radarr` | `Movies` |
 | `tv`, `sonarr` | `TV` |
@@ -163,29 +191,10 @@ Die Bridge bildet die SABnzbd-Kategorie auf einen JDownloader-Ordner ab. Der Nam
 | `software` | `Software` |
 | `whisparr` | `Adult` |
 
-## Umgebungsvariablen
+## Local development
 
-| Variable | Beschreibung | Pflicht |
-| --- | --- | --- |
-| `DDLNZB_API_URL` | Basis-URL der DDLnzb-API | Ja |
-| `DDLNZB_API_KEY` | API-Key aus dem Portal | Ja |
-| `MYJD_EMAIL` | My-JDownloader-E-Mail | Ja |
-| `MYJD_PASSWORD` | My-JDownloader-Passwort | Ja |
-| `MYJD_DEVICE_NAME` | Name des JDownloader-Geräts | Ja |
-| `MYJD_APP_KEY` | My-JDownloader-App-Key | Nein (Default `DDLnzb`) |
-| `DOWNLOAD_DIR` | Zielverzeichnis für Links ohne JDownloader | Nein (Default `./downloads`) |
-| `BRIDGE_LOG_LEVEL` | Log-Level | Nein (Default `INFO`) |
-| `BRIDGE_HOST` / `BRIDGE_PORT` | Bind-Adresse für lokale Läufe | Nein (Default `127.0.0.1:8080`) |
-| `EXTRACT_ARCHIVES` / `DELETE_ARCHIVES` | Archive entpacken bzw. löschen | Nein (Default `true`) |
-| `DDLNZB_STATE_FILE` / `DDLNZB_DATA_DIR` | Ablage der Queue und History | Nein |
-
-⚠️ **Im Container gelten `BRIDGE_HOST` und `BRIDGE_PORT` nicht.** Das Image startet uvicorn per `CMD` mit `--host 0.0.0.0 --port 6789` — der Dockerfile-Vorrang. Der SABnzbd-Port ist deshalb immer **6789**, lokal `BRIDGE_PORT` (Default 8080).
-
-## Lokale Entwicklung
-
-Beim lokalen Start außerhalb von Docker lädt die Anwendung automatisch die
-Datei `bridge/.env`. Lege dort alle benötigten Schlüssel ab und starte
-anschließend:
+When started outside of Docker the application loads the file `bridge/.env`
+automatically. Put all required keys there and then start:
 
 ```bash
 cd bridge
@@ -193,4 +202,4 @@ poetry install
 poetry run uvicorn app.main:app --reload
 ```
 
-Weitere Schritte sind nicht nötig – die Variablen stehen sofort zur Verfügung.
+No further steps are needed — the variables are available immediately.

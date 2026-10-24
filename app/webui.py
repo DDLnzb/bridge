@@ -1,30 +1,31 @@
 """
-DDLnzb Bridge - Web-Oberflaeche fuer die Einrichtung
+DDLnzb Bridge - Web UI for the setup
 
-Eine kleine, serverseitig gerenderte Oberflaeche, ueber die sich der Bridge
-konfigurieren laesst: API-Key, JDownloader-Zugang, Download-Zielordner und
-Log-Stufe. Sie ersetzt kein Container-Deployment - sie macht die Konfiguration
-aber bequem, ohne die `.env` auf dem Host zu oeffnen.
+A small, server-rendered UI via which the bridge can be configured: API key,
+JDownloader access, download target folder and log level. It does not replace
+a container deployment - but it makes the configuration convenient without
+opening the `.env` on the host.
 
-## Zugang
+## Access
 
-Der Bridge hat genau einen Schluessel: `DDLNZB_API_KEY`. Derselbe Wert gilt
-fuer die SABnzbd-API der *arr-Apps und fuer diese Oberflaeche.
+The bridge has exactly one key: `DDLNZB_API_KEY`. The same value applies to the
+SABnzbd API of the *arr apps and to this UI.
 
-- **Ersteinrichtung** (`/ui`): solange kein Key konfiguriert ist, zeigt die
-  Seite das Setup-Formular. Es verlangt den Setup-Token aus dem Container-Log
-  - ohne Token kann niemand die Bridge uebernehmen, auch nicht aus dem LAN.
-- **Anmeldung**: danach wird der Key als Passwort eingegeben. Er wird nicht
-  gespeichert, sondern als session cookie abgelegt. Das Cookie enthaelt nur
-  eine HMAC-Ableitung des Keys, nicht den Key selbst.
+- **Initial setup** (`/ui`): as long as no key is configured, the page shows
+  the setup form. It requires the setup token from the container log - without
+  the token nobody can take over the bridge, not even from the LAN.
+- **Login**: afterwards the key is entered as a password. It is not stored but
+  kept as a session cookie. The cookie contains only an HMAC derivation of the
+  key, not the key itself.
 
-## Schutzmechanismen
+## Protection mechanisms
 
-- Session-Cookie: `HttpOnly`, `SameSite=Strict`, `Path=/ui`. `SameSite=Strict`
-  ist zugleich der CSRF-Schutz - ein fremder Origin kann kein Cookie mitschicken.
-- Der Vergleich des Keys laeuft ueber `secrets.compare_digest`, nie mit `==`.
-- Geheimnisse werden nie zurueck in die Oberflaeche gespiegelt: ein gesetztes
-  Passwort erscheint als Platzhalter, nicht als Wert.
+- Session cookie: `HttpOnly`, `SameSite=Strict`, `Path=/ui`. `SameSite=Strict`
+  is at the same time the CSRF protection - a foreign origin cannot send the
+  cookie along.
+- The key comparison runs through `secrets.compare_digest`, never with `==`.
+- Secrets are never mirrored back into the UI: a set password appears as a
+  placeholder, not as a value.
 """
 
 import hashlib
@@ -56,11 +57,11 @@ SESSION_TTL = 7 * 24 * 60 * 60
 
 _STARTED_AT = datetime.now(timezone.utc)
 
-# Setup-Token: gilt nur, solange kein API-Key konfiguriert ist. Wird pro
-# Prozess neu erzeugt - ein Neustart invalidiert einen alten Token.
+# Setup token: valid only as long as no API key is configured. Generated anew
+# per process - a restart invalidates an old token.
 _SETUP_TOKEN: str | None = None
 
-# Letzte Ergebnisse der Verbindungstests (prozesslokal, nur Anzeige).
+# Latest results of the connection tests (process-local, display only).
 _LAST_TEST: dict[str, dict[str, Any]] = {}
 
 
@@ -68,31 +69,31 @@ _LAST_TEST: dict[str, dict[str, Any]] = {}
 
 
 def setup_token() -> str:
-    """Setup-Token liefern und beim ersten Aufruf erzeugen.
+    """Return the setup token and generate it on the first call.
 
-    Ein Token aus `DDLNZB_SETUP_TOKEN` gewinnt - damit laesst sich die
-    Ersteinrichtung in automatisierten Deployments ohne Log-Lesen steuern.
+    A token from `DDLNZB_SETUP_TOKEN` wins - that way the initial setup can be
+    steered in automated deployments without reading the log.
     """
     global _SETUP_TOKEN
     if _SETUP_TOKEN is None:
         _SETUP_TOKEN = os.getenv("DDLNZB_SETUP_TOKEN") or secrets.token_urlsafe(12)
         logger.warning(
-            "Bridge ist nicht konfiguriert - Setup-Token: %s "
-            "(Einrichtung ueber http://<host>:6789/ui)",
+            "Bridge is not configured - setup token: %s "
+            "(setup via http://<host>:6789/ui)",
             _SETUP_TOKEN,
         )
     return _SETUP_TOKEN
 
 
 def _session_token(api_key: str) -> str:
-    """Session-Cookie-Wert: HMAC des Keys, nicht der Key selbst."""
+    """Session cookie value: HMAC of the key, not the key itself."""
     return hmac.new(
         api_key.encode("utf-8"), b"ddlnzb-bridge-ui-session-v1", hashlib.sha256
     ).hexdigest()
 
 
 def _session_valid(request: Request) -> bool:
-    """Traegt der Request ein gueltiges Session-Cookie?"""
+    """Does the request carry a valid session cookie?"""
     api_key = config.DDLNZB_API_KEY
     if not api_key:
         return False
@@ -103,16 +104,16 @@ def _session_valid(request: Request) -> bool:
 
 
 def _presented_key(request: Request) -> str:
-    """Direkt mitgeschickter Key (Header oder Query) - fuer Maschinenclients."""
+    """Key sent directly (header or query) - for machine clients."""
     return request.headers.get("X-API-Key") or request.query_params.get("apikey") or ""
 
 
 async def require_ui_auth(request: Request) -> None:
-    """Zugriffsschutz fuer die schreibenden Endpunkte.
+    """Access protection for the writing endpoints.
 
-    Zwei Wege: das Session-Cookie der Oberflaeche oder der Key direkt im
-    Header. Beide werden zeitkonstant verglichen. Ohne konfigurierten Key ist
-    **kein** Aufruf gueltig - eine leere Konfiguration schliesst.
+    Two ways: the session cookie of the web UI or the key directly in the
+    header. Both are compared in constant time. Without a configured key
+    **no** call is valid - an empty configuration closes everything.
     """
     api_key = config.DDLNZB_API_KEY
     if not api_key:
@@ -149,7 +150,7 @@ def _clear_session(response) -> None:
 
 
 def record_test(kind: str, ok: bool, detail: str) -> None:
-    """Ergebnis eines Verbindungstests fuer die Anzeige merken."""
+    """Remember the result of a connection test for the display."""
     _LAST_TEST[kind] = {
         "ok": ok,
         "detail": detail,
@@ -158,17 +159,17 @@ def record_test(kind: str, ok: bool, detail: str) -> None:
 
 
 def _test_badge(kind: str) -> tuple[str, str]:
-    """(Label, Badge-Klasse) fuer den zuletzt gemessenen Zustand."""
+    """(Label, badge class) for the last measured state."""
     result = _LAST_TEST.get(kind)
     if not result:
-        return "unbekannt", ""
+        return "unknown", ""
     if result["ok"]:
-        return "erreichbar", "ok"
-    return "nicht erreichbar", "err"
+        return "reachable", "ok"
+    return "not reachable", "err"
 
 
 def _view(request: Request) -> dict[str, Any]:
-    """Datenbasis fuer die Hauptseite."""
+    """Data basis for the main page."""
     stored = settings_store.load()
     queued = sum(1 for item in download_queue.values() if getattr(item, "status", "") == "Queued")
     downloading = sum(
@@ -177,7 +178,7 @@ def _view(request: Request) -> dict[str, Any]:
 
     api_label, api_kind = _test_badge("api")
     jd_connected = jdownloader.device_id is not None
-    jd_label, jd_kind = ("verbunden", "ok") if jd_connected else ("nicht verbunden", "warn")
+    jd_label, jd_kind = ("connected", "ok") if jd_connected else ("not connected", "warn")
 
     mapping = config.CATEGORY_MAPPING or {}
     categories = ", ".join(f"{key} → {value}" for key, value in list(mapping.items())[:3])
@@ -186,7 +187,7 @@ def _view(request: Request) -> dict[str, Any]:
         "flash": request.query_params.get("flash"),
         "api_url": config.DDLNZB_API_URL,
         "api_key_set": bool(config.DDLNZB_API_KEY),
-        "api_reachable": api_label == "erreichbar",
+        "api_reachable": api_label == "reachable",
         "api_label": api_label,
         "api_kind": api_kind,
         "jd_email": config.MYJD_EMAIL,
@@ -204,11 +205,11 @@ def _view(request: Request) -> dict[str, Any]:
         "queue_total": len(download_queue),
         "queue_queued": queued,
         "queue_downloading": downloading,
-        "config_source": "Settings-Datei" if stored else "Umgebung",
+        "config_source": "settings file" if stored else "environment",
         "settings_path": str(settings_store.settings_path()),
         "started_at": _STARTED_AT.astimezone().strftime("%d.%m.%Y %H:%M:%S"),
         "version": "1.0.0",
-        "category_summary": f"{categories} (+{max(len(mapping) - 3, 0)} weitere)"
+        "category_summary": f"{categories} (+{max(len(mapping) - 3, 0)} more)"
         if len(mapping) > 3
         else categories,
     }
@@ -220,7 +221,7 @@ def _view(request: Request) -> dict[str, Any]:
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Startseite: Setup, Anmeldung oder Dashboard."""
+    """Start page: setup, login or dashboard."""
     if not config.DDLNZB_API_KEY:
         return HTMLResponse(setup_page())
     if not _session_valid(request):
@@ -230,7 +231,7 @@ async def index(request: Request):
 
 @router.post("/login")
 async def login(request: Request):
-    """Anmeldung mit dem Bridge-Key."""
+    """Login with the bridge key."""
     form = await _form_values(request)
     presented = str(form.get("key") or "")
     expected = config.DDLNZB_API_KEY
@@ -239,7 +240,7 @@ async def login(request: Request):
         return RedirectResponse("/ui", status_code=303)
 
     if not secrets.compare_digest(presented, expected):
-        return HTMLResponse(login_page("Ungueltiger API-Key."), status_code=401)
+        return HTMLResponse(login_page("Invalid API key."), status_code=401)
 
     response = RedirectResponse("/ui", status_code=303)
     _set_session(response, expected)
@@ -248,7 +249,7 @@ async def login(request: Request):
 
 @router.post("/logout")
 async def logout():
-    """Session beenden."""
+    """End the session."""
     response = RedirectResponse("/ui", status_code=303)
     _clear_session(response)
     return response
@@ -256,11 +257,11 @@ async def logout():
 
 @router.post("/setup")
 async def setup(request: Request):
-    """Ersteinrichtung: Setup-Token pruefen und die Grundkonfiguration speichern."""
+    """Initial setup: check the setup token and store the basic configuration."""
     global _SETUP_TOKEN
 
     if config.DDLNZB_API_KEY:
-        # Schon konfiguriert - die Ersteinrichtung ist erledigt.
+        # Already configured - the initial setup is done.
         return RedirectResponse("/ui", status_code=303)
 
     form = await _form_values(request)
@@ -268,11 +269,11 @@ async def setup(request: Request):
     expected = setup_token()
 
     if not presented or not secrets.compare_digest(presented, expected):
-        return HTMLResponse(setup_page("Ungueltiger Setup-Token."), status_code=401)
+        return HTMLResponse(setup_page("Invalid setup token."), status_code=401)
 
     api_key = str(form.get("api_key") or "").strip()
     if not api_key:
-        return HTMLResponse(setup_page("Der DDLnzb-API-Key ist Pflicht."), status_code=400)
+        return HTMLResponse(setup_page("The DDLnzb API key is required."), status_code=400)
 
     values: dict[str, Any] = {"DDLNZB_API_KEY": api_key}
     for form_name, field in settings_store.FORM_FIELDS.items():
@@ -285,31 +286,31 @@ async def setup(request: Request):
     settings_store.save(values)
     config.reload()
 
-    # Der Token ist verbraucht - eine zweite Nutzung ist damit ausgeschlossen.
+    # The token is used up - a second use is thereby excluded.
     _SETUP_TOKEN = None
 
     response = RedirectResponse("/ui", status_code=303)
     _set_session(response, config.DDLNZB_API_KEY)
-    logger.info("Ersteinrichtung abgeschlossen, %d Werte gespeichert", len(values))
+    logger.info("Initial setup completed, %d values saved", len(values))
     return response
 
 
 @router.post("/settings", dependencies=[Depends(require_ui_auth)])
 async def save_settings(request: Request):
-    """Konfiguration aus dem Formular uebernehmen."""
+    """Take over the configuration from the form."""
     form = await _form_values(request)
     values = _collect_values(form)
 
     try:
         settings_store.save(values)
     except OSError as exc:
-        logger.error("Settings konnten nicht gespeichert werden: %s", exc)
+        logger.error("Settings could not be saved: %s", exc)
         return RedirectResponse("/ui?flash=error", status_code=303)
 
     config.reload()
 
-    # Neue Zugangsdaten sofort uebernehmen: der alte myjdapi-Client haelt
-    # die alten Daten und wuerde sonst bis zum Neustart weiterverwenden.
+    # Apply new credentials immediately: the old myjdapi client keeps the old
+    # data and would otherwise use it until the restart.
     if any(key in values for key in ("MYJD_EMAIL", "MYJD_PASSWORD", "MYJD_DEVICE_NAME")):
         await jdownloader.reconfigure()
 
@@ -321,7 +322,7 @@ async def save_settings(request: Request):
 
 @router.post("/reset", dependencies=[Depends(require_ui_auth)])
 async def reset_settings():
-    """Alle Overrides loeschen - es gelten wieder die Werte aus der Umgebung."""
+    """Delete all overrides - the values from the environment apply again."""
     settings_store.clear()
     config.reload()
     return RedirectResponse("/ui?flash=reset", status_code=303)
@@ -329,7 +330,7 @@ async def reset_settings():
 
 @router.post("/test", dependencies=[Depends(require_ui_auth)])
 async def test_connections():
-    """Erreichbarkeit von API und JDownloader pruefen."""
+    """Check the reachability of API and JDownloader."""
     await _check_api()
     await _check_jdownloader()
     return _LAST_TEST
@@ -337,27 +338,27 @@ async def test_connections():
 
 @router.post("/reconnect", dependencies=[Depends(require_ui_auth)])
 async def reconnect():
-    """JDownloader mit den aktuellen Zugangsdaten neu verbinden."""
+    """Reconnect JDownloader with the current credentials."""
     ok = await jdownloader.reconfigure()
     detail = (
-        "verbunden"
+        "connected"
         if ok
-        else "keine Verbindung - Zugangsdaten oder Geraete-Name pruefen"
+        else "no connection - check the credentials or the device name"
     )
     record_test("jdownloader", ok, detail)
     return {"ok": ok, "detail": detail}
 
 
-# --------------------------------------------------------------- Hilfsdinge
+# --------------------------------------------------------------- Helpers
 
 
 def _collect_values(form: dict[str, str]) -> dict[str, Any]:
-    """Formularfelder in Settings-Werte uebersetzen.
+    """Translate form fields into settings values.
 
-    Leere Textfelder werden **nicht** uebernommen: ein leeres Feld bedeutet
-    "unveraendert lassen", nicht "loeschen". Nur der Reset-Knopf leert die
-    Konfiguration. Checkboxen werden immer uebernommen - ein abgesetzter
-    Haken ist ein Wert, kein leeres Feld.
+    Empty text fields are **not** taken over: an empty field means "leave
+    unchanged", not "delete". Only the reset button empties the configuration.
+    Checkboxes are always taken over - an unchecked box is a value, not an
+    empty field.
     """
     values: dict[str, Any] = {}
     for form_name, field in settings_store.FORM_FIELDS.items():
@@ -375,12 +376,12 @@ def _collect_values(form: dict[str, str]) -> dict[str, Any]:
 
 
 async def _form_values(request: Request) -> dict[str, str]:
-    """Formularwerte auslesen - ohne `python-multipart`.
+    """Read the form values - without `python-multipart`.
 
-    Die Bridge kommt bewusst ohne diese Abhaengigkeit aus (sie liest auch beim
-    `mode=addfile` den Roh-Body). Hier wird deshalb der Body selbst
-    ausgewertet: `application/x-www-form-urlencoded` ueber `parse_qs`, JSON
-    ueber `json.loads`.
+    The bridge deliberately does without that dependency (it also reads the
+    raw body with `mode=addfile`). The body itself is therefore evaluated
+    here: `application/x-www-form-urlencoded` via `parse_qs`, JSON via
+    `json.loads`.
     """
     content_type = request.headers.get("content-type", "")
     body = await request.body()
@@ -402,7 +403,7 @@ async def _form_values(request: Request) -> dict[str, str]:
 
 
 async def _check_api() -> bool:
-    """Health-Endpoint der DDLnzb-API abfragen."""
+    """Query the health endpoint of the DDLnzb API."""
     url = f"{config.DDLNZB_API_URL}/health"
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -411,7 +412,7 @@ async def _check_api() -> bool:
         detail = f"HTTP {response.status_code} von {url}"
     except Exception as exc:
         ok = False
-        detail = f"{url} nicht erreichbar ({exc})"
+        detail = f"{url} not reachable ({exc})"
     record_test("api", ok, detail)
     return ok
 
@@ -419,15 +420,15 @@ async def _check_api() -> bool:
 async def _check_jdownloader() -> bool:
     """JDownloader-Status abfragen."""
     if not config.MYJD_EMAIL or not config.MYJD_PASSWORD:
-        record_test("jdownloader", False, "Keine JDownloader-Zugangsdaten konfiguriert")
+        record_test("jdownloader", False, "No JDownloader credentials configured")
         return False
     try:
         devices = await jdownloader.get_devices()
         names = [device.get("name", "") for device in devices.get("list", [])]
         ok = bool(names)
-        detail = ", ".join(names) if names else "Keine Geraete im JDownloader-Account"
+        detail = ", ".join(names) if names else "No devices in the JDownloader account"
     except Exception as exc:
         ok = False
-        detail = f"JDownloader nicht erreichbar ({exc})"
+        detail = f"JDownloader not reachable ({exc})"
     record_test("jdownloader", ok, detail)
     return ok

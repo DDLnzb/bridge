@@ -52,7 +52,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:6789/health || exit 1
 
 # Run application
-# Zielpfad ist app/, nicht src/: app/ ist die produktive Implementierung und der
-# einzige Pfad, dessen Config-Variablen in bridge/.env gepflegt werden. src/ ist
-# ein Stub mit disjunktem Config-Vertrag (siehe bridge/AGENTS.md).
+# Target path is app/, not src/: app/ is the production implementation and the
+# only path whose config variables are maintained in bridge/.env. src/ is
+# a stub with a disjoint config contract (see bridge/AGENTS.md).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6789"]

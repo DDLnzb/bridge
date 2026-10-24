@@ -80,8 +80,8 @@ async def lifespan(app: FastAPI):
     else:
         print("JDownloader credentials not configured")
 
-    # Ohne API-Key ist der Bridge funktional unbrauchbar - dann braucht es den
-    # Setup-Token fuer die Ersteinrichtung ueber /ui. Das Token steht im Log.
+    # Without an API key the bridge is functionally unusable - then the setup
+    # token is needed for the initial setup via /ui. The token is in the log.
     if not config.DDLNZB_API_KEY:
         webui.setup_token()
 
@@ -152,14 +152,14 @@ app.add_middleware(
 
 
 def _route_template(request: Request) -> str:
-    """Route-Template statt des rohen Pfads als Label-Wert.
+    """Route template instead of the raw path as the label value.
 
-    Der rohe Pfad ist unbeschaenkt in der Kardi­nalitaet: jeder Link-Titel
-    und jeder Scanner-Treffer erzeugt eine eigene Serie. Das Template
-    (`/api`) haelt das Label bounded.
+    The raw path is unbounded in cardinality: every link title and every
+    scanner hit produces its own series. The template (`/api`) keeps the label
+    bounded.
 
-    Aufgeloest wird das Template erst **nach** `call_next`, weil Starlette die
-    Route erst im Routing-Schritt setzt. Requests ohne Treffer landen in
+    The template is only resolved **after** `call_next`, because Starlette sets
+    the route during the routing step. Requests without a match end up in
     `unmatched`.
     """
     route = request.scope.get("route")
@@ -213,11 +213,11 @@ async def prometheus_metrics(request: Request, call_next):
 # Include SABnzbd-compatible API
 app.include_router(sabnzbd_router)
 
-# Web-Oberflaeche fuer die Einrichtung (siehe app/webui.py)
+# Web UI for the setup (see app/webui.py)
 app.include_router(webui_router)
 
-# Statische Dateien der Oberflaeche (CSS/JS). Der Mount muss unter /ui liegen,
-# weil die Routen dort mit Prefix /ui registriert sind.
+# Static files of the web UI (CSS/JS). The mount must live under /ui, because
+# the routes there are registered with the /ui prefix.
 app.mount(
     "/ui/static",
     StaticFiles(directory=str(Path(__file__).parent / "static")),
@@ -230,18 +230,18 @@ async def require_bridge_key(
     apikey: str | None = Query(None),
     authorization: str | None = Header(None),
 ) -> None:
-    """Bridge-Key-Prüfung für alle Routen außer `/health`.
+    """Bridge key check for all routes except `/health`.
 
-    Deckt sich mit der Prüfung in `sabnzbd_api.py` und schließt bei fehlender
-    Konfiguration: ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig. Sonst
-    ließe sich ein Bridge ohne Key durch die Hintertür abschalten.
+    Matches the check in `sabnzbd_api.py` and also closes when the
+    configuration is missing: if `DDLNZB_API_KEY` is empty, no call is valid.
+    Otherwise a bridge without a key could be disabled through the back door.
 
-    Drei Wege werden akzeptiert:
-    - `X-API-Key: <key>` (Header) — der Weg der *arr-Apps und des Backends
-    - `?apikey=<key>` (Query) — SABnzbd-Kompatibilität
-    - `Authorization: Bearer <key>` — Prometheus kann nur einen Bearer-Token
-      mitschicken (`bearer_token_file`), keine freien Header. Ohne diesen Weg
-      wäre ein geschütztes `/metrics` nicht abfragbar.
+    Three ways are accepted:
+    - `X-API-Key: <key>` (header) - the way of the *arr apps and the backend
+    - `?apikey=<key>` (query) - SABnzbd compatibility
+    - `Authorization: Bearer <key>` - Prometheus can only send a bearer token
+      (`bearer_token_file`), no free-form header. Without this path a
+      protected `/metrics` could not be queried.
     """
     bearer = ""
     if authorization and authorization.lower().startswith("bearer "):
@@ -268,8 +268,9 @@ async def root():
 async def health():
     """Health check endpoint.
 
-    Bewusst ohne Auth: Load-Balancer und Docker-HEALTHCHECK müssen den Endpunkt
-    ohne Zugangsdaten erreichen können. Hier steht auch nichts außer `status`.
+    Deliberately without auth: load balancers and the Docker HEALTHCHECK must
+    be able to reach the endpoint without credentials. Nothing besides `status`
+    is returned here.
     """
     return {"status": "healthy"}
 
@@ -278,10 +279,10 @@ async def health():
 async def metrics() -> Response:
     """Prometheus metrics endpoint.
 
-    Geschuetzt wie `/status`: der Bridge-Port 6789 ist im Prod-Compose
-    veroeffentlicht, und die Metriken verraten Queue-Tiefe und
-    Request-Muster. Prometheus liefert den Key als Bearer-Token
-    (`bearer_token_file` in `monitoring/prometheus/prometheus.yml`).
+    Protected like `/status`: the bridge port 6789 is published in the prod
+    compose file, and the metrics reveal queue depth and request patterns.
+    Prometheus supplies the key as a bearer token (`bearer_token_file` in
+    `monitoring/prometheus/prometheus.yml`).
     """
     queued = sum(1 for item in download_queue.values() if getattr(item, "status", "") == "Queued")
     downloading = sum(

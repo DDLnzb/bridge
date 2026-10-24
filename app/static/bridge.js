@@ -1,8 +1,8 @@
-/* DDLnzb Bridge - Web-Oberflaeche: Interaktion
+/* DDLnzb Bridge - Web UI: interactions
  *
- * Kein Framework, kein Build. Das Skript nutzt nur, was der Browser mitbringt.
- * Alle Anfragen laufen same-origin; das Session-Cookie wird vom Browser
- * automatisch mitgeschickt.
+ * No framework, no build. The script uses only what the browser brings along.
+ * All requests are same-origin; the browser sends the session cookie along
+ * automatically.
  */
 
 (function () {
@@ -18,7 +18,7 @@
     return Array.prototype.slice.call((root || document).querySelectorAll(selector));
   }
 
-  /* ------------------------------------------------------- Passwort anzeigen */
+  /* ------------------------------------------------------- Show password */
 
   function initSecretToggles() {
     $all("[data-toggle-secret]").forEach(function (button) {
@@ -32,14 +32,14 @@
         button.classList.toggle("is-active", !shown);
         var label = button.querySelector("span");
         if (label) {
-          label.textContent = shown ? "Anzeigen" : "Verbergen";
+          label.textContent = shown ? "Show" : "Hide";
         }
         input.focus();
       });
     });
   }
 
-  /* ------------------------------------------------------ Ladezustand am Knopf */
+  /* --------------------------------------------------- Loading state on button */
 
   function withLoading(button, promiseFactory) {
     if (button.dataset.busy === "1") {
@@ -58,7 +58,7 @@
     promiseFactory().then(restore, restore);
   }
 
-  /* --------------------------------------------------------------- Ergebnisse */
+  /* --------------------------------------------------------------- Results */
 
   function showResult(kind, ok, detail) {
     var box = $('[data-result="' + kind + '"]');
@@ -67,14 +67,14 @@
     if (!box || !value) {
       return;
     }
-    value.textContent = ok ? "erreichbar" : "nicht erreichbar";
+    value.textContent = ok ? "reachable" : "not reachable";
     value.className = ok ? "badge badge-ok" : "badge badge-err";
     if (detailBox) {
       detailBox.textContent = detail || "";
     }
     box.classList.add("is-visible");
     box.classList.remove("is-revealed");
-    /* Reflow erzwingen, damit die Animation erneut laeuft. */
+    /* Force a reflow so that the animation runs again. */
     void box.offsetWidth;
     box.classList.add("is-revealed");
   }
@@ -116,7 +116,7 @@
   function initReset() {
     $all("[data-reset]").forEach(function (button) {
       button.addEventListener("click", function () {
-        if (!window.confirm("Alle gespeicherten Werte verwerfen und zur Umgebung zurueck?")) {
+        if (!window.confirm("Discard all saved values and go back to the environment?")) {
           return;
         }
         withLoading(button, function () {
@@ -132,7 +132,7 @@
     });
   }
 
-  /* --------------------------------------------- Ungespeicherte Aenderungen */
+  /* --------------------------------------------------- Unsaved changes */
 
   function initDirtyTracking() {
     var form = $("#settings-form");
@@ -162,8 +162,8 @@
       });
       if (hint) {
         hint.textContent = dirty
-          ? "Ungespeicherte Aenderungen - Speichern uebernimmt sie sofort."
-          : "Aenderungen gelten sofort - kein Neustart noetig.";
+          ? "Unsaved changes - saving applies them immediately."
+          : "Changes apply immediately - no restart needed.";
         hint.classList.toggle("is-dirty", dirty);
       }
       if (submit) {
@@ -175,7 +175,7 @@
     form.addEventListener("input", evaluate);
     form.addEventListener("change", evaluate);
 
-    /* Ctrl+S / Cmd+S speichert, statt den Browser-Dialog zu oeffnen. */
+    /* Ctrl+S / Cmd+S saves instead of opening the browser dialog. */
     document.addEventListener("keydown", function (event) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();

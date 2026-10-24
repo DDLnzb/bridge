@@ -1,19 +1,19 @@
-"""Vertrag zwischen Bridge-Konfiguration, Compose-Service und README.
+"""Contract between bridge configuration, compose service and README.
 
-Zwei Befunde, die sich beide still verhalten (#555, #671):
+Two findings that both behave silently (#555, #671):
 
-- Der Bridge-Service in `docker-compose.prod.yml` startete mit `API_URL` statt
-  `DDLNZB_API_URL` und bekam seine Zugangsdaten nicht. Der Prozess startete,
-  lehnte aber jeden SABnzbd-Aufruf ab ("Bridge API key not configured") und
-  erreichte die API nicht.
-- `bridge/README.md` dokumentierte den Configvertrag des `src/`-Stubs
-  (`JD_EMAIL`, `DDLNZB_BRIDGE_TOKEN`). Wer dem Quick Start folgte, startete
-  eine Bridge ohne Zugang.
+- The bridge service in `docker-compose.prod.yml` started with `API_URL`
+  instead of `DDLNZB_API_URL` and did not receive its credentials. The process
+  started, but rejected every SABnzbd call ("Bridge API key not configured")
+  and never reached the API.
+- `bridge/README.md` documented the config contract of the `src/` stub
+  (`JD_EMAIL`, `DDLNZB_BRIDGE_TOKEN`). Anyone who followed the quick start
+  started a bridge without access.
 
-Der Vertrag ist deshalb an der Quelle festgemacht: **was `app/config.py`
-liest, muss in `bridge/.env` stehen, im Compose-Service als Variable gesetzt
-sein und in der README benannt werden.** Alles andere ist Dekoration, die
-irgendwann gegen den Code verrottet.
+The contract is therefore pinned at the source: **what `app/config.py` reads
+must be present in `bridge/.env`, set as a variable in the compose service and
+named in the README.** Everything else is decoration that will eventually rot
+against the code.
 """
 
 from __future__ import annotations
@@ -30,44 +30,43 @@ CONFIG_FILE = BRIDGE_DIR / "app" / "config.py"
 README_FILE = BRIDGE_DIR / "README.md"
 ENV_FILE = BRIDGE_DIR / ".env"
 
-#: Dieser Test prueft den **Monorepo**-Vertrag: die Compose-Datei des
-#: Produktionsstacks und die versionierte `bridge/.env`. Beides existiert im
-#: public Repo `DDLnzb/bridge` bewusst nicht - dort liegt der Code im
-#: Repo-Root, es gibt keine Compose-Datei und keine versionierten
-#: Zugangsdaten. Die Pruefungen laufen deshalb nur im Monorepo, wo ihr
-#: Gegenstand liegt.
+#: This test checks the deployment contract: the compose file of the
+#: production stack and the versioned `.env`. Neither of them exists here on
+#: purpose — this repository holds the code in the repo root, there is no
+#: compose file and no versioned credentials. The checks therefore only run
+#: where their subject is.
 #:
-#: Der Wächter hängt an genau den Dateien, die die Tests lesen. Ein Check auf
-#: das Verzeichnis `bridge/` allein trügt: das public Repo heisst selbst
-#: "bridge", sodass `BRIDGE_DIR` dort auf das Repo-Root zeigt und der
-#: Verzeichnis-Check faelschlich gruen bleibt.
+#: The guard is attached to exactly the files the tests read. A check on the
+#: directory alone misleads: this repository itself is called "bridge", so
+#: `BRIDGE_DIR` points to the repo root and the directory check would stay
+#: green incorrectly.
 if not (COMPOSE_FILE.is_file() and ENV_FILE.is_file()):
     pytest.skip(
-        "Monorepo-Vertrag (docker-compose.prod.yml, bridge/.env) - "
-        "im public Repo nicht vorhanden",
+        "Deployment contract (compose file, versioned .env) - "
+        "not present in this repository",
         allow_module_level=True,
     )
 
-#: Variablen des `src/`-Stubs. Die Bridge startet `app/` - diese Namen liest
-#: kein laufender Prozess. Wer sie in der README findet, folgt dem falschen
-#: Vertrag (#671).
+#: Variables of the `src/` stub. The bridge starts `app/` — no running process
+#: reads these names. Anyone who finds them in the README follows the wrong
+#: contract (#671).
 SRC_VARIABLEN = ("DDLNZB_BRIDGE_TOKEN", "JD_EMAIL", "JD_PASSWORD", "JD_DEVICE")
 
-#: Erfundene Download-Pfade. Es gibt nur `DOWNLOAD_DIR` plus das fest
-#: verdrahtete `CATEGORY_MAPPING` (`bridge/app/config.py`).
+#: Invented download paths. There is only `DOWNLOAD_DIR` plus the hard-wired
+#: `CATEGORY_MAPPING` (`bridge/app/config.py`).
 ERFUNDENE_PFAD_VARIABLEN = ("DOWNLOAD_PATH_MOVIES", "DOWNLOAD_PATH_TV", "DOWNLOAD_PATH_DOCS")
 
-#: `os.getenv("NAME", "")` - ein leerer Default macht die Variable zur Pflicht.
+#: `os.getenv("NAME", "")` — an empty default makes the variable mandatory.
 _GETENV_PFLICHT = re.compile(r'os\.getenv\(\s*"([A-Z0-9_]+)"\s*,\s*""\s*\)')
 _GETENV_OHNE_DEFAULT = re.compile(r'os\.getenv\(\s*"([A-Z0-9_]+)"\s*\)')
 
 
 def _service_block(text: str, name: str) -> str:
-    """Der Block eines Compose-Service als Text.
+    """The block of a compose service as text.
 
-    Gleiches Muster wie in `backend/tests/worker/test_vpn_config_mount.py`:
-    ein Service beginnt mit zwei Leerzeichen und dem Namen, endet beim
-    naechsten Service.
+    Same pattern as in `backend/tests/worker/test_vpn_config_mount.py`:
+    a service starts with two spaces and the name and ends at the next
+    service.
     """
     zeilen = text.splitlines()
     for index, zeile in enumerate(zeilen):
@@ -81,23 +80,23 @@ def _service_block(text: str, name: str) -> str:
             block.append(folgezeile)
         return "\n".join(block)
 
-    raise AssertionError(f"Kein Service {name!r} in {COMPOSE_FILE.name} gefunden")
+    raise AssertionError(f"No service {name!r} found in {COMPOSE_FILE.name}")
 
 
 def _gelesene_variablen() -> set[str]:
-    """Alle Variablen, die `app/config.py` aus der Umgebung liest."""
+    """All variables that `app/config.py` reads from the environment."""
     text = CONFIG_FILE.read_text()
     return set(_GETENV_PFLICHT.findall(text)) | set(_GETENV_OHNE_DEFAULT.findall(text))
 
 
 def _pflicht_variablen() -> set[str]:
-    """Die gelesenen Variablen ohne brauchbaren Default - ohne sie startet
-    die Bridge funktional leer."""
+    """The read variables without a usable default — without them the bridge
+    starts functionally empty."""
     return _gelesene_variablen()
 
 
 def _env_werte() -> dict[str, str]:
-    """Die gesetzten Variablen aus `bridge/.env`."""
+    """The set variables from `bridge/.env`."""
     werte: dict[str, str] = {}
     for zeile in ENV_FILE.read_text().splitlines():
         zeile = zeile.strip()
@@ -109,17 +108,17 @@ def _env_werte() -> dict[str, str]:
 
 
 def test_compose_setzt_die_api_url_mit_ddl_anzb_vorzeichen() -> None:
-    """Der Code liest `DDLNZB_API_URL` - das Compose muss es auch setzen.
+    """The code reads `DDLNZB_API_URL` — the compose must set it too.
 
-    Mit `API_URL` bleibt die Variable leer, der Bridge faellt auf
-    `http://localhost:8000` zurueck und erreicht die API nicht (#555).
+    With `API_URL` the variable stays empty, the bridge falls back to
+    `http://localhost:8000` and does not reach the API (#555).
     """
     block = _service_block(COMPOSE_FILE.read_text(), "bridge")
 
     assert "DDLNZB_API_URL=" in block, (
-        "Der Bridge-Service setzt DDLNZB_API_URL nicht.\n"
+        "The bridge service does not set DDLNZB_API_URL.\n"
         f"Block:\n{block}\n"
-        "Ohne die Variable fällt der Bridge auf http://localhost:8000 zurück."
+        "Without the variable the bridge falls back to http://localhost:8000."
     )
 
     falsche = [
@@ -128,29 +127,29 @@ def test_compose_setzt_die_api_url_mit_ddl_anzb_vorzeichen() -> None:
         if re.match(r"^\s*-\s*API_URL=", zeile) or re.match(r"^\s*API_URL=", zeile)
     ]
     assert not falsche, (
-        "Der Bridge-Service setzt die API-URL unter dem falschen Namen "
+        "The bridge service sets the API URL under the wrong name "
         f"`API_URL`: {falsche}.\n"
-        "`app/config.py` liest ausschließlich `DDLNZB_API_URL`."
+        "`app/config.py` reads exclusively `DDLNZB_API_URL`."
     )
 
 
 def test_compose_zeigt_auf_den_api_service_im_compose_netz() -> None:
-    """`localhost` zeigt aus dem Container auf den Container selbst."""
+    """`localhost` points from inside the container at the container itself."""
     block = _service_block(COMPOSE_FILE.read_text(), "bridge")
 
     treffer = re.search(r"DDLNZB_API_URL=(\S+)", block)
-    assert treffer, "Der Bridge-Service setzt DDLNZB_API_URL nicht."
+    assert treffer, "The bridge service does not set DDLNZB_API_URL."
 
     wert = treffer.group(1)
     assert "localhost" not in wert and "127.0.0.1" not in wert, (
-        f"DDLNZB_API_URL zeigt auf {wert!r}. Aus dem Container ist das der "
-        "Container selbst - der Bridge erreicht die API so nicht.\n"
-        "Im Compose-Netz heißt der API-Service `api`."
+        f"DDLNZB_API_URL points at {wert!r}. From inside the container that is "
+        "the container itself - the bridge does not reach the API that way.\n"
+        "In the compose network the API service is called `api`."
     )
 
 
 def test_compose_gibt_dem_bridge_seine_zugangsdaten() -> None:
-    """Ohne Zugangsdaten startet der Bridge, lehnt aber jeden Aufruf ab."""
+    """Without credentials the bridge starts, but rejects every call."""
     block = _service_block(COMPOSE_FILE.read_text(), "bridge")
 
     liest_env_file = bool(re.search(r"env_file:", block))
@@ -165,77 +164,77 @@ def test_compose_gibt_dem_bridge_seine_zugangsdaten() -> None:
     aus_environment = pflicht <= gesetzte
 
     assert aus_environment or liest_env_file, (
-        "Der Bridge-Service bekommt seine Zugangsdaten nicht.\n"
+        "The bridge service does not receive its credentials.\n"
         f"Block:\n{block}\n"
-        "Erwartet wird entweder ein `env_file:` (bridge/.env pflegt genau die "
-        "Variablen aus app/config.py) oder ein vollständiges `environment:`-"
-        "Set mit DDLNZB_API_KEY, MYJD_EMAIL, MYJD_PASSWORD und "
+        "What is expected is either an `env_file:` (bridge/.env maintains exactly "
+        "the variables from app/config.py) or a complete `environment:` "
+        "set with DDLNZB_API_KEY, MYJD_EMAIL, MYJD_PASSWORD and "
         "MYJD_DEVICE_NAME."
     )
 
 
 def test_bridge_env_datei_setzt_jede_pflichtvariable() -> None:
-    """`bridge/.env` ist die Quelle für den lokalen Start - sie muss
-    vollständig sein."""
-    assert ENV_FILE.exists(), f"{ENV_FILE} fehlt. Die Datei ist versioniert."
+    """`bridge/.env` is the source for the local start — it must be
+    complete."""
+    assert ENV_FILE.exists(), f"{ENV_FILE} is missing. The file is versioned."
 
     werte = _env_werte()
     fehlend = sorted(name for name in _pflicht_variablen() if not werte.get(name))
 
     assert not fehlend, (
-        f"In bridge/.env fehlen nicht-leere Werte für: {fehlend}.\n"
-        "Diese Variablen liest app/config.py ohne brauchbaren Default - ohne sie "
-        "startet die Bridge funktional leer (API-Key fehlt, JDownloader "
-        "verbindet sich nicht)."
+        f"bridge/.env has no non-empty values for: {fehlend}.\n"
+        "app/config.py reads these variables without a usable default - without "
+        "them the bridge starts functionally empty (API key missing, JDownloader "
+        "does not connect)."
     )
 
 
 def test_readme_nennt_jede_pflichtvariable() -> None:
-    """Die README muss den Vertrag nennen, den der Code liest."""
+    """The README must name the contract that the code reads."""
     readme = README_FILE.read_text()
 
     fehlend = sorted(name for name in _pflicht_variablen() if name not in readme)
 
     assert not fehlend, (
-        f"bridge/README.md nennt diese von app/config.py gelesenen "
-        f"Variablen nicht: {fehlend}.\n"
-        "Wer dem Quick Start folgt, startet sonst eine Bridge ohne Zugang."
+        f"bridge/README.md does not name these variables read by app/config.py: "
+        f"{fehlend}.\n"
+        "Anyone who follows the quick start otherwise starts a bridge without access."
     )
 
 
 def _enthaelt_variable(text: str, name: str) -> bool:
-    """Ob `text` die Variable als eigenstaendiges Token nennt.
+    """Whether `text` names the variable as a standalone token.
 
-    Die Wortgrenze ist wichtig: `MYJD_EMAIL` enthaelt `JD_EMAIL` als
-    Teilstring. Ohne die Grenze wuerde ein korrektes README als falsch
-    gemeldet.
+    The word boundary matters: `MYJD_EMAIL` contains `JD_EMAIL` as a
+    substring. Without the boundary a correct README would be reported as
+    wrong.
     """
     return re.search(rf"(?<![A-Z0-9_]){re.escape(name)}(?![A-Z0-9_])", text) is not None
 
 
 def test_readme_nennt_keine_src_variablen() -> None:
-    """`src/` wird nicht gestartet - sein Configvertrag ist tot (#671)."""
+    """`src/` is not started — its config contract is dead (#671)."""
     readme = README_FILE.read_text()
 
     treffer = [name for name in SRC_VARIABLEN if _enthaelt_variable(readme, name)]
     assert not treffer, (
-        f"bridge/README.md nennt die src/-Variablen {treffer}.\n"
-        "Der gestartete Pfad ist app/ und liest MYJD_* und DDLNZB_API_KEY."
+        f"bridge/README.md names the src/ variables {treffer}.\n"
+        "The started path is app/ and reads MYJD_* and DDLNZB_API_KEY."
     )
 
     erfunden = [name for name in ERFUNDENE_PFAD_VARIABLEN if _enthaelt_variable(readme, name)]
     assert not erfunden, (
-        f"bridge/README.md nennt die nicht existierenden Pfadvariablen {erfunden}.\n"
-        "Es gibt nur DOWNLOAD_DIR und das fest verdrahtete CATEGORY_MAPPING."
+        f"bridge/README.md names the non-existent path variables {erfunden}.\n"
+        "There is only DOWNLOAD_DIR and the hard-wired CATEGORY_MAPPING."
     )
 
 
 def test_readme_nennt_den_sabnzbd_port_6789() -> None:
-    """Der Container lauscht fest auf 6789 (Dockerfile-CMD)."""
+    """The container listens on 6789 by hard wiring (Dockerfile CMD)."""
     readme = README_FILE.read_text()
 
     assert "6789" in readme, (
-        "bridge/README.md nennt den SABnzbd-Port 6789 nicht.\n"
-        "Das Image startet uvicorn per CMD mit --host 0.0.0.0 --port 6789 - "
-        "BRIDGE_PORT gilt nur für lokale Läufe."
+        "bridge/README.md does not name the SABnzbd port 6789.\n"
+        "The image starts uvicorn via CMD with --host 0.0.0.0 --port 6789 - "
+        "BRIDGE_PORT only applies to local runs."
     )
