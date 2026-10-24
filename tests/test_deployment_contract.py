@@ -173,6 +173,42 @@ def test_compose_gibt_dem_bridge_seine_zugangsdaten() -> None:
     )
 
 
+def test_der_api_key_stammt_aus_der_env_file_und_nicht_aus_environment() -> None:
+    """`environment` wins over `env_file` - an empty entry empties the key.
+
+    The bridge service set `DDLNZB_API_KEY=${DDLNZB_API_KEY:-}` next to
+    `env_file: ./bridge/.env`. Compose resolves that entry to an empty string
+    and thereby overwrites the key from the file as soon as the variable is
+    not set in the `.env` of the host (#716). The bridge then starts without a
+    key and rejects every SABnzbd call.
+    """
+    block = _service_block(COMPOSE_FILE.read_text(), "bridge")
+
+    environment = re.search(r"environment:\n((?:\s{6}-.*\n)+)", block)
+    gesetzte = (
+        set(re.findall(r"^\s*-\s*([A-Z0-9_]+)=", environment.group(1), re.M))
+        if environment
+        else set()
+    )
+
+    assert "DDLNZB_API_KEY" not in gesetzte, (
+        "The bridge service sets DDLNZB_API_KEY in the `environment` section.\n"
+        f"Block:\n{block}\n"
+        "In Compose `environment` wins over `env_file`: an empty entry "
+        "overwrites the key from bridge/.env with an empty string (#716)."
+    )
+
+    assert "./bridge/.env" in block, (
+        "The bridge service does not read bridge/.env any more. Without the "
+        "file the credentials are missing (#555)."
+    )
+
+    assert _env_werte().get("DDLNZB_API_KEY"), (
+        "bridge/.env has no DDLNZB_API_KEY. With the `environment` entry gone "
+        "the file is the only source of the key."
+    )
+
+
 def test_bridge_env_datei_setzt_jede_pflichtvariable() -> None:
     """`bridge/.env` is the source for the local start — it must be
     complete."""
