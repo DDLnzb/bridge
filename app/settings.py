@@ -45,7 +45,7 @@ SETTINGS_VERSION = 1
 # beim Reload stillschweigend ins Leere laufen.
 #
 # `DDLNZB_API_URL` steht hier bewusst **nicht** drin: die API-URL bringt der
-# Bridge selbst mit (Default `https://api.petsground.de`). Sie ist eine
+# Bridge selbst mit (Default `https://ddlnzb.pages.dev/api/app`). Sie ist eine
 # Deployment-Festlegung und wird ueber die Umgebung gesetzt, nicht ueber die
 # Oberflaeche - sonst koennte ein Klick in der Web-UI den Bridge auf einen
 # beliebigen Host umbiegen.
