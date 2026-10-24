@@ -94,9 +94,7 @@ async def _einen_durchlauf(monkeypatch, paket):
     with pytest.raises(_LoopVerlassen):
         await download_handler._monitor_jdownloader("nzo-jd", PAKETT_NAME)
 
-    assert len(abrufe) == 1, (
-        "The monitoring loop did not see the entry - the test checks nothing"
-    )
+    assert len(abrufe) == 1, "The monitoring loop did not see the entry - the test checks nothing"
 
 
 # --- #374: URL construction ------------------------------------------------
