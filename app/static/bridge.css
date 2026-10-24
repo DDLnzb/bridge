@@ -1,12 +1,12 @@
 /* ==========================================================================
-   DDLnzb Bridge - Web-Oberflaeche
+   DDLnzb Bridge - Web UI
 
-   Die Farb- und Radiuswerte sind die Tokens aus `frontend/src/app/globals.css`
-   (Tailwind-4-Theme der DDLnzb-Website). Bewusst hell - die Website setzt
-   die `.dark`-Klasse nirgends, es gibt keinen Theme-Toggle.
+   The color and radius values are the tokens from `frontend/src/app/globals.css`
+   (Tailwind 4 theme of the DDLnzb website). Deliberately light - the website
+   never sets the `.dark` class, there is no theme toggle.
 
-   Keine externen Ressourcen: die Oberflaeche laeuft auf einem lokalen Host
-   und muss auch ohne Internet funktionieren. Fonts sind der System-Stack.
+   No external resources: the UI runs on a local host and must also work
+   without internet. Fonts are the system stack.
    ========================================================================== */
 
 :root {
@@ -248,8 +248,8 @@ code,
   border-bottom: 1px solid var(--border);
 }
 
-/* Der Titelblock waechst, der Knopf bleibt rechts - auch wenn die Beschreibung
-   lang ist. Ohne `flex-basis` wuerde der Knopf in die naechste Zeile umbrechen. */
+/* The title block grows, the button stays on the right - even if the description
+   is long. Without `flex-basis` the button would wrap into the next line. */
 .card-head > :first-child {
   flex: 1 1 260px;
   min-width: 0;
@@ -927,7 +927,7 @@ code,
   animation: pulse-dot 2.4s ease-in-out infinite;
 }
 
-/* Ladezustand am Knopf: ein kleiner Spinner anstelle der Beschriftung. */
+/* Loading state on the button: a small spinner instead of the label. */
 
 .btn.is-busy {
   position: relative;
@@ -953,7 +953,7 @@ code,
   color: var(--foreground);
 }
 
-/* Ungespeicherte Aenderungen sichtbar machen. */
+/* Make unsaved changes visible. */
 
 .savebar-hint.is-dirty {
   color: #b45309;

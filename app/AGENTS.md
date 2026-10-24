@@ -1,207 +1,207 @@
 # Bridge `app/` — AGENTS.md
 
-Produktive Implementierung. Zum Gegenstück `../src/AGENTS.md` siehe das Parent-Doc.
+Production implementation. For the counterpart `../src/AGENTS.md` see the parent doc.
 
 ## Purpose
 
-SABnzbd-kompatible API-Oberfläche, Queue-Verwaltung, JDownloader-Anbindung und das Polling der DDLnzb-Cloud-API.
+SABnzbd-compatible API surface, queue management, JDownloader integration and the polling of the DDLnzb cloud API.
 
 ## Local Contracts
 
-### Prometheus-Metriken des Bridge
+### Prometheus metrics of the bridge
 
-`metrics.py` definiert vier Metriken mit dem Präfix `ddlnzb_bridge_`: HTTP-Requests
-(Label `service="bridge"`), Request-Dauer, Requests in flight und die
-Queue-Tiefe (`state` = `total`/`queued`/`downloading`).
+`metrics.py` defines four metrics with the prefix `ddlnzb_bridge_`: HTTP requests
+(label `service="bridge"`), request duration, requests in flight and the queue
+depth (`state` = `total`/`queued`/`downloading`).
 
-Die Zähler werden über die HTTP-Middleware in `main.py` gefüllt, die
-Queue-Tiefe über den Endpunkt `GET /metrics` — dort werden die Gauges vor dem
-Export frisch gesetzt, weil sie sonst nur den Stand des letzten Scrape zeigen.
-Die Alert-Regeln in `monitoring/prometheus/rules/ddlnzb-alerts.yml` greifen auf
-genau diese Namen zu.
+The counters are filled via the HTTP middleware in `main.py`, the queue depth via
+the endpoint `GET /metrics` — there the gauges are set fresh before the export,
+because otherwise they only show the state of the last scrape. The alert rules in
+`monitoring/prometheus/rules/ddlnzb-alerts.yml` use exactly these names.
 
-Das `endpoint`-Label trägt das **Route-Template** (`_route_template()`), nicht
-den rohen Pfad — sonst erzeugt jeder Link-Titel und jeder Scanner-Treffer eine
-eigene Serie und die TSDB wächst ohne Grenzen. Ohne Route-Treffer landet der
-Request in `unmatched`.
+The `endpoint` label carries the **route template** (`_route_template()`), not
+the raw path — otherwise every link title and every scanner hit produces its own
+series and the TSDB grows without bounds. Requests without a route match end up
+in `unmatched`.
 
-### Globale Instanzen statt Dependency Injection
+### Global instances instead of dependency injection
 
-Vier Modul-Globals, die einmal beim Import erzeugt werden: `jdownloader`, `download_handler`, `jd_heartbeat`, `queue_persistence`, dazu die Queue-Listen `download_queue` und `download_history` in `sabnzbd_api.py`.
+Four module globals that are created once at import time: `jdownloader`, `download_handler`, `jd_heartbeat`, `queue_persistence`, plus the queue lists `download_queue` and `download_history` in `sabnzbd_api.py`.
 
-Der Lifespan in `main.py` initialisiert sie in fester Reihenfolge: Health-Check der API → JDownloader-Connect → State-Restore → Start der Hintergrund-Tasks. Wer ein Modul hinzufügt, das eine dieser Instanzen benötigt, muss die Reihenfolge beachten.
+The lifespan in `main.py` initializes them in a fixed order: health check of the API → JDownloader connect → state restore → start of the background tasks. Anyone adding a module that needs one of these instances must respect the order.
 
-### Dispatch über den `mode`-Parameter
+### Dispatch via the `mode` parameter
 
-`sabnzbd_api.py` nutzt **einen** Endpunkt (`GET /api` und `POST /api`) mit Dispatch über `mode=`. Unterstützte Modi: `auth`, `version`, `get_cats`, `get_config`, `queue`, `history`, `addurl`, `addfile`, `ddlnzb_links`, `delete`, `retry`, `fullstatus`.
+`sabnzbd_api.py` uses **one** endpoint (`GET /api` and `POST /api`) with dispatch via `mode=`. Supported modes: `auth`, `version`, `get_cats`, `get_config`, `queue`, `history`, `addurl`, `addfile`, `ddlnzb_links`, `delete`, `retry`, `fullstatus`.
 
-Neue Modi hier ergänzen, nicht als eigene Route danebenlegen — sonst verstehen die *arr-Clients den Endpunkt nicht.
+Add new modes here, do not put them alongside as their own route — otherwise the *arr clients do not understand the endpoint.
 
-### API-Key-Prüfung
+### API key check
 
-Es gibt **zwei** getrennte Prüfungen, beide gegen `config.DDLNZB_API_KEY`:
+There are **two** separate checks, both against `config.DDLNZB_API_KEY`:
 
-| Ort | Form | Verhalten bei Abweichung |
+| Location | Form | Behavior on mismatch |
 | --- | --- | --- |
-| `sabnzbd_api.py`, Dispatch am `/api`-Endpunkt | Query-Param `apikey` | `{"status": false, "error": "Invalid API key"}` |
-| `main.py`, Dependency `require_bridge_key` | Header `X-API-Key`, Query-Param `apikey` **oder** `Authorization: Bearer <key>` | `HTTPException(401, "Invalid API key")` |
+| `sabnzbd_api.py`, dispatch at the `/api` endpoint | query parameter `apikey` | `{"status": false, "error": "Invalid API key"}` |
+| `main.py`, dependency `require_bridge_key` | header `X-API-Key`, query parameter `apikey` **or** `Authorization: Bearer <key>` | `HTTPException(401, "Invalid API key")` |
 
-`require_bridge_key` hängt an `@app.get("/")`, `@app.get("/status")`, `@app.get("/metrics")` und `@app.post("/heartbeat/reconnect")`. **Neue Routen in `main.py` brauchen diese Dependency ausdrücklich** — FastAPI schützt nichts automatisch. `/health` ist die einzige bewusst offene Route: Docker-HEALTHCHECK und Load-Balancer müssen sie ohne Zugangsdaten erreichen.
+`require_bridge_key` is attached to `@app.get("/")`, `@app.get("/status")`, `@app.get("/metrics")` and `@app.post("/heartbeat/reconnect")`. **New routes in `main.py` need this dependency explicitly** — FastAPI protects nothing automatically. `/health` is the only deliberately open route: the Docker HEALTHCHECK and the load balancer must be able to reach it without credentials.
 
-Der **Bearer**-Weg existiert für Prometheus: der kann keinen freien Header setzen, sondern nur `bearer_token_file`. Ohne diesen Weg wäre ein geschütztes `/metrics` nicht abfragbar. Er darf nicht entfernt werden, solange der Monitoring-Stack den Bridge über `bridge:6789/metrics` scrapt.
+The **bearer** path exists for Prometheus: it cannot set a free-form header, only `bearer_token_file`. Without this path a protected `/metrics` could not be queried. It must not be removed as long as the monitoring stack scrapes the bridge via `bridge:6789/metrics`.
 
-Zwei Eigenschaften, die bei Änderungen nicht verloren gehen dürfen:
+Two properties that must not get lost in changes:
 
-- **Leere Konfiguration schließt.** Ist `DDLNZB_API_KEY` leer, ist kein Aufruf gültig (`not config.DDLNZB_API_KEY or ...`). Andernfalls ließe sich eine Bridge ohne Key abschalten.
-- **`secrets.compare_digest`, nicht `==`.** Zeitkonstanter Vergleich. Stand 2026-10-19 stimmte das nur für `main.py`; der Dispatch in `sabnzbd_api.py` verglich mit `!=` (#478).
+- **An empty configuration closes everything.** If `DDLNZB_API_KEY` is empty, no call is valid (`not config.DDLNZB_API_KEY or ...`). Otherwise a bridge without a key could be switched off.
+- **`secrets.compare_digest`, not `==`.** Constant-time comparison. As of 2026-10-19 that was only true for `main.py`; the dispatch in `sabnzbd_api.py` compared with `!=` (#478).
 
-  ⚠️ **Verhaltenstests unterscheiden das nicht.** Beide Vergleiche liefern dieselbe Antwort, der Unterschied liegt nur in der Laufzeit. `tests/test_api_dispatch_auth.py` beobachtet deshalb den *Aufruf* von `compare_digest` über eine Attrappe — mit einem Mutationstest bestätigt, dass die übrigen zehn Tests bei der Rückkehr zu `!=` grün bleiben. Wer die Prüfung umstellt, muss den Spy mitpflegen, sonst ist die Absicherung wirkungslos.
+  ⚠️ **Behavior tests do not distinguish this.** Both comparisons deliver the same answer, the difference lies only in the runtime. `tests/test_api_dispatch_auth.py` therefore observes the *call* of `compare_digest` via a dummy — confirmed with a mutation test that the remaining ten tests stay green on a return to `!=`. Anyone switching the check must maintain the spy, otherwise the protection is ineffective.
 
-`mode=auth` gibt `{"auth": "ok"}` zurück — es wird **kein** Key-Hash verglichen, nur Gleichheit.
+`mode=auth` returns `{"auth": "ok"}` — **no** key hash is compared, only equality.
 
-### Fehlende Konfiguration ist kein Abbruch
+### Missing configuration is not an abort
 
-Fehlt `DDLNZB_API_KEY`, loggt der Lifespan nur `logger.warning("DDLnzb API key not configured")` und startet weiter. Der Prozess startet also, ist aber funktional unbrauchbar: `/api` und alle Routen außer `/health` lehnen jeden Aufruf ab. Das ist als offener Punkt in `../plan/BRIDGE_COMPLETION_PLAN.md` (AP1) dokumentiert. Wer das zum Fail-Fast ändert, löst damit auch die offene Aufgabe auf — das ist eine bewusste Entscheidung, kein Bugfix.
+If `DDLNZB_API_KEY` is missing, the lifespan only logs `logger.warning("DDLnzb API key not configured")` and starts anyway. The process therefore starts, but is functionally unusable: `/api` and all routes except `/health` reject every call. Changing this to fail-fast is a deliberate decision, not a bug fix.
 
-Seit dem 23.10.2026 gibt es dafür einen Ausweg: die Web-Oberfläche `/ui` zeigt in diesem Zustand das Setup-Formular und nimmt dort den API-Key entgegen (mit Setup-Token aus dem Log). Der Prozess startet also weiter, ist aber **über die Oberfläche** in einen arbeitsfähigen Zustand bringbar, ohne die `.env` zu anfassen.
+Since 23.10.2026 there is a way out: the web UI `/ui` shows the setup form in this state and accepts the API key there (with the setup token from the log). The process therefore still starts, but can be brought **via the UI** into a working state without touching the `.env`.
 
-### Die Config ist zur Laufzeit änderbar
+### The config is changeable at runtime
 
-`BridgeConfig` ist ein Modul-Global, das an vielen Stellen **beim Aufruf** gelesen wird (`config.DDLNZB_API_KEY` in `sabnzbd_api.py` und `main.py`, `config.DOWNLOAD_DIR` in `download_handler.py`). Deshalb wirkt eine Änderung sofort, ohne Neustart.
+`BridgeConfig` is a module global that is read in many places **at call time** (`config.DDLNZB_API_KEY` in `sabnzbd_api.py` and `main.py`, `config.DOWNLOAD_DIR` in `download_handler.py`). Therefore a change takes effect immediately, without a restart.
 
-Zwei Voraussetzungen dafür:
+Two prerequisites for this:
 
-1. **`ENV_SOURCES` in `config.py` ist die einzige Quelle der Wahrheit** für Feldname, Env-Name und Default. Die Dataclass-Felder haben darum keine eigenen Defaults mehr — `__post_init__` löst sie aus der Umgebung auf. Wer ein Feld ergänzt, muss es dort eintragen; sonst greift der Wert nie.
-2. **`config.reload()`** liest die Umgebung neu und legt die Overrides der Settings-Datei darüber. Das ist der einzige Einstiegspunkt für die Oberfläche.
+1. **`ENV_SOURCES` in `config.py` is the only source of truth** for field name, env name and default. The dataclass fields therefore no longer have their own defaults — `__post_init__` resolves them from the environment. Anyone adding a field must enter it there; otherwise the value never takes effect.
+2. **`config.reload()`** reads the environment anew and layers the overrides of the settings file on top. This is the only entry point for the UI.
 
-Ausnahmen, die einen Neustart brauchen: `LOG_LEVEL` (wirkt nur beim `logging.basicConfig` im Lifespan) und `STATE_FILE`/`DATA_DIR` (die Pfade werden beim Modulimport in Modulkonstanten gebildet, u. a. `sabnzbd_api.STATE_PATH`).
+Exceptions that need a restart: `LOG_LEVEL` (only effective in the `logging.basicConfig` in the lifespan) and `STATE_FILE`/`DATA_DIR` (the paths are formed in module constants at module import time, among others `sabnzbd_api.STATE_PATH`).
 
-### Die Web-Oberfläche (`webui.py`)
+### The web UI (`webui.py`)
 
-| Datei | Inhalt |
+| File | Content |
 | --- | --- |
-| `webui.py` | Router, Auth, Setup-Flow, Speichern, Verbindungstests |
-| `webui_templates.py` | Markup, serverseitig in Python gebaut |
-| `static/bridge.css` | Farbtokens aus `frontend/src/app/globals.css` |
-| `static/bridge.js` | Passwort-Anzeige, Ladezustände, Dirty-Indikator |
+| `webui.py` | Router, auth, setup flow, saving, connection tests |
+| `webui_templates.py` | Markup, built server-side in Python |
+| `static/bridge.css` | Color tokens from `frontend/src/app/globals.css` |
+| `static/bridge.js` | Password display, loading states, dirty indicator |
 
-**Der Auth der Oberfläche ist ein eigener Weg** und nicht `require_bridge_key`: Session-Cookie (`HttpOnly`, `SameSite=Strict`, `Path=/ui`) mit einer HMAC-Ableitung des Keys, alternativ der Key direkt im Header. Der Cookie enthält den Key **nicht**, sondern nur `HMAC(key, "ddlnzb-bridge-ui-session-v1")`.
+**The auth of the UI is its own path** and not `require_bridge_key`: session cookie (`HttpOnly`, `SameSite=Strict`, `Path=/ui`) with an HMAC derivation of the key, alternatively the key directly in the header. The cookie does **not** contain the key, only `HMAC(key, "ddlnzb-bridge-ui-session-v1")`.
 
-Warum ein eigener Weg: `require_bridge_key` kennt nur Header und Query-Param. Ein Browser kann keinen Header setzen, ohne JavaScript — der Login wäre über die SABnzbd-Query-Param-Variante in der Adresszeile gelandet und der Key stünde im Verlauf. Der Cookie umgeht das.
+Why its own path: `require_bridge_key` only knows header and query parameter. A browser cannot set a header without JavaScript — the login would have ended up in the address bar via the SABnzbd query parameter variant and the key would be in the history. The cookie avoids that.
 
-**`SameSite=Strict` ist der CSRF-Schutz.** Es gibt kein CSRF-Token: ein fremder Origin kann das Cookie nicht mitschicken, ein Cross-Site-POST kommt also ohne Session an und wird mit 401 abgewiesen.
+**`SameSite=Strict` is the CSRF protection.** There is no CSRF token: a foreign origin cannot send the cookie along, so a cross-site POST arrives without a session and is rejected with 401.
 
-**Keine neue Abhängigkeit.** Das HTML wird in Python gebaut (keine Template-Engine), die Formulare werden aus dem Roh-Body gelesen — `python-multipart` bleibt außen vor, so wie `mode=addfile` im SABnzbd-Dispatcher es auch ohne auskommt. Wer hier ein Formular ergänzt, muss `webui._form_values()` benutzen, nicht `await request.form()`.
+**No new dependency.** The HTML is built in Python (no template engine), the forms are read from the raw body — `python-multipart` stays out, just like `mode=addfile` in the SABnzbd dispatcher does without it. Anyone adding a form here must use `webui._form_values()`, not `await request.form()`.
 
-**Neue Felder brauchen drei Stellen:** `settings.FIELD_TYPES` (Typ), `settings.FORM_FIELDS` (Formularname → Feldname) und das Formular in `webui_templates.py`. Die Schlüssel in `FIELD_TYPES` sind die **Feldnamen** aus `BridgeConfig`, nicht die Env-Namen — für `LOG_LEVEL` sind die beiden verschieden (`BRIDGE_LOG_LEVEL`), und ein Mix aus beidem liefe beim Reload ins Leere.
+**New fields need three places:** `settings.FIELD_TYPES` (type), `settings.FORM_FIELDS` (form name → field name) and the form in `webui_templates.py`. The keys in `FIELD_TYPES` are the **field names** from `BridgeConfig`, not the env names — for `LOG_LEVEL` the two differ (`BRIDGE_LOG_LEVEL`), and mixing them would resolve to nothing on reload.
 
-⚠️ **`DDLNZB_API_URL` steht bewusst nicht in `FIELD_TYPES`.** Die API-URL bringt der Bridge mit; sie ist nur per Env überschreibbar. Ein Klick in der Oberfläche darf den Bridge nicht auf einen beliebigen Host umbiegen.
+⚠️ **`DDLNZB_API_URL` is deliberately not in `FIELD_TYPES`.** The bridge ships the API URL; it is only overridable via env. A click in the UI must not redirect the bridge to an arbitrary host.
 
-**Geheimnisse werden nie zurückgespiegelt.** Ein gesetztes Passwort erscheint als Platzhalter, nicht als Wert. Im Formular bedeutet ein leeres Feld „unverändert lassen", nicht „löschen" — nur der Reset-Knopf (`POST /ui/reset`) leert die Konfiguration. Abgesetzte Checkboxen sind dagegen ein Wert (`false`), kein leeres Feld.
+**Secrets are never mirrored back.** A set password appears as a placeholder, not as a value. In the form an empty field means "leave unchanged", not "delete" — only the reset button (`POST /ui/reset`) empties the configuration. Unchecked checkboxes on the other hand are a value (`false`), not an empty field.
 
-**`jdownloader.reconfigure()`** ist der einzige Weg, neue Zugangsdaten zu übernehmen: der `myjdapi`-Client hält die alten Werte bis zum Neustart. Die Methode verbindet neu und liefert `True` nur, wenn das konfigurierte Gerät auch gefunden wurde.
+**`jdownloader.reconfigure()`** is the only way to take over new credentials: the `myjdapi` client keeps the old values until the restart. The method reconnects and returns `True` only if the configured device was found as well.
 
-### Ein Übergangspunkt Queue → Historie
+### One transition point queue → history
 
-`_move_to_history()` in `sabnzbd_api.py` ist der **einzige** Weg, auf dem ein Eintrag aus `download_queue` nach `download_history` wandert. `complete_download()`, `fail_download()` und `mark_manual_download()` sind dünne Wrapper darum.
+`_move_to_history()` in `sabnzbd_api.py` is the **only** way on which an entry moves from `download_queue` to `download_history`. `complete_download()`, `fail_download()` and `mark_manual_download()` are thin wrappers around it.
 
-Zwei Eigenschaften stecken bewusst darin:
+Two properties are deliberately in it:
 
-- **Persistieren.** Vor der Zusammenführung haben die drei Aufrufstellen es unterschiedlich gemacht — `fail_download` und `mark_manual_download` haben ihren Eintrag bei jedem Neustart verloren. Neuer Übergang: `_move_to_history` aufrufen, nicht von Hand in beide Dicts schreiben.
-- **Links mitnehmen.** `links=item.links` geht in die `HistoryItem`. Ohne sie kann `mode=retry` den Auftrag nicht wieder einreihen.
+- **Persisting.** Before the merge the three call sites did it differently — `fail_download` and `mark_manual_download` lost their entry on every restart. New transition: call `_move_to_history`, do not write into both dicts by hand.
+- **Take the links along.** `links=item.links` goes into the `HistoryItem`. Without them `mode=retry` cannot queue the job again.
 
-`mode=retry` weist Einträge mit `status == "Completed"` ab: das Paket existiert im JDownloader-Entpackungsordner nicht mehr.
+`mode=retry` rejects entries with `status == "Completed"`: the package no longer exists in the JDownloader extraction folder.
 
-### `status` trägt nur das SABnzbd-Vokabular, der Text steht in `message`
+### `status` carries only the SABnzbd vocabulary, the text is in `message`
 
-`status` jedes Queue- und History-Slots ist ein Wert aus `SAB_STATUSES` — die
-Menge aus Sonarrs `SabnzbdDownloadStatus`
+The `status` of every queue and history slot is a value from `SAB_STATUSES` — the
+set from Sonarr's `SabnzbdDownloadStatus`
 (`src/NzbDrone.Core/Download/Clients/Sabnzbd/SabnzbdDownloadStatus.cs`).
 
-**Newtonsoft bricht beim Deserialisieren die gesamte Queue- bzw.
-History-Antwort ab, sobald ein Slot einen fremden Wert trägt** — nicht nur den
-einen Eintrag. Der Download-Client ist dann für die *arr-App komplett tot
-(#659).** Bis zum 23.10.2026 trug der Slot freie Texte wie
-`"Fetching links..."` oder `"Failed: Hoster down"`.
+**Newtonsoft aborts the deserialization of the entire queue or history response
+as soon as a slot carries a foreign value** — not just that one entry. The
+download client is then completely dead for the *arr app (#659).** Until
+23.10.2026 the slot carried free texts like `"Fetching links..."` or
+`"Failed: Hoster down"`.
 
-Daraus folgt die Arbeitsteilung:
+The division of labor follows from that:
 
-- `status` — **nur** ein Wert aus `SAB_STATUSES`.
-- `message` (Queue) bzw. `fail_message` (History) — der ausführliche Text.
-- `_sab_status(text)` übersetzt die Freitexte des Download-Handlers
-  (`_STATUS_TEXT_MAP`). Unbekannte Texte landen in `Downloading` und werden
-  geloggt; der Originaltext geht nicht verloren, er steht in `message`.
+- `status` — **only** a value from `SAB_STATUSES`.
+- `message` (queue) respectively `fail_message` (history) — the detailed text.
+- `_sab_status(text)` translates the free texts of the download handler
+  (`_STATUS_TEXT_MAP`). Unknown texts land in `Downloading` and are logged; the
+  original text is not lost, it is in `message`.
 
-**"Starting download..." darf nicht zu "Queued" werden.** Der Download-Handler
-nimmt nur Einträge mit Status `Queued` an — ein `Queued` an dieser Stelle
-würde den Eintrag sofort wieder aufnehmen.
+**"Starting download..." must not become "Queued".** The download handler only
+accepts entries with the status `Queued` — a `Queued` at this point would pick
+the entry up again immediately.
 
-### Die Größe wird in Bytes geführt, nicht als Text
+### The size is kept in bytes, not as text
 
-`QueueItem.size_bytes` / `sizeleft_bytes` und `HistoryItem.size_bytes` sind die
-**einzige** Quelle. `size`, `sizeleft`, `mb`, `mbleft` und `bytes` werden daraus
-abgeleitet.
+`QueueItem.size_bytes` / `sizeleft_bytes` and `HistoryItem.size_bytes` are the
+**only** source. `size`, `sizeleft`, `mb`, `mbleft` and `bytes` are derived from
+them.
 
-Sonarr/Radarr rechnen `TotalSize = mb * 1024 * 1024` (Queue) und lesen die
-History-Größe aus `bytes`. Ohne diese Felder zeigen sie jede Datei als 0 MB
-(#658). Zwei getrennt geführte Werte (Text **und** Bytes) sind der Grund, warum
-`sizeleft` dauerhaft auf dem Startwert stehen blieb: es gab keinen Ort, an dem
-die Restgröße fortgeschrieben wurde.
+Sonarr/Radarr compute `TotalSize = mb * 1024 * 1024` (queue) and read the
+history size from `bytes`. Without these fields they show every file as 0 MB
+(#658). Two separately maintained values (text **and** bytes) are the reason why
+`sizeleft` permanently stayed at the initial value: there was no place where the
+remaining size was written.
 
-`set_item_size()` und `_set_sizeleft()` sind die einzigen Stellen, die die
-Größe verändern. `_set_sizeleft()` nimmt die echten Byte-Zahlen aus
-JDownloader (`bytes_loaded`/`bytes_total`); sind sie nicht bekannt, wird die
-Restgröße aus dem Fortschritt abgeleitet.
+`set_item_size()` and `_set_sizeleft()` are the only places that change the
+size. `_set_sizeleft()` takes the real byte counts from JDownloader
+(`bytes_loaded`/`bytes_total`); if they are unknown, the remaining size is
+derived from the progress.
 
-### Die nzo_id kommt im Parameter `value`, gelöscht wird mit `name=delete`
+### The nzo_id comes in the parameter `value`, deletion happens with `name=delete`
 
-Sonarr/Radarr sprechen den Dispatch so an:
+Sonarr/Radarr call the dispatch like this:
 
-| Aufruf | Wirkung |
+| Call | Effect |
 | --- | --- |
-| `mode=queue&name=delete&value=<nzo_id>` | Eintrag aus der Queue entfernen |
-| `mode=history&name=delete&value=<nzo_id>` | Eintrag aus der History entfernen |
-| `mode=delete&value=<nzo_id>` | Eintrag aus der Queue entfernen |
-| `mode=retry&value=<nzo_id>` | fehlgeschlagenen Download wieder einreihen |
+| `mode=queue&name=delete&value=<nzo_id>` | Remove the entry from the queue |
+| `mode=history&name=delete&value=<nzo_id>` | Remove the entry from the history |
+| `mode=delete&value=<nzo_id>` | Remove the entry from the queue |
+| `mode=retry&value=<nzo_id>` | Queue the failed download again |
 
-`value` ist der SABnzbd-Standardname; `nzo_id` bleibt als bridge-native Form
-unterstützt. **Ohne `value` kennt die Bridge die nzo_id nicht** — bis zum
-23.10.2026 war `value` nicht deklariert, ein `name=delete` lief ins Leere (#657).
+`value` is the standard SABnzbd name; `nzo_id` remains supported as the
+bridge-native form. **Without `value` the bridge does not know the nzo_id** —
+until 23.10.2026 `value` was not declared, a `name=delete` ran into the void
+(#657).
 
-Zwei Fallen:
+Two traps:
 
-- `mode=queue` **ohne** `name=delete` bleibt das Listing. Ein leeres `name` darf
-  die Queue nicht leeren.
-- `mode=delete` kennt nur die **Queue**. Ein Historieneintrag wird über
-  `mode=history&name=delete` gelöscht.
+- `mode=queue` **without** `name=delete` remains the listing. An empty `name`
+  must not empty the queue.
+- `mode=delete` only knows the **queue**. A history entry is deleted via
+  `mode=history&name=delete`.
 
-### CORS ist unsicher konfiguriert
+### CORS is configured unsafely
 
-`main.py` setzt `allow_origins=["*"]` **zusammen mit** `allow_credentials=True`. Diese Kombination ist unsicher. Der Bridge lauscht standardmäßig auf `127.0.0.1`, im Docker-Image aber auf `0.0.0.0`.
+`main.py` sets `allow_origins=["*"]` **together with** `allow_credentials=True`. This combination is unsafe. The bridge listens on `127.0.0.1` by default, but on `0.0.0.0` in the Docker image.
 
-### Zeitlimits sind hart kodiert
+### Time limits are hardcoded
 
-- Cloud-Calls: Timeout 30s, 3 Versuche, exponentielles Backoff
-- JDownloader-Monitoring: 5s Polling aktiv / 300s idle, `max_duration = 30*60` (30 Minuten)
-- Heartbeat: `HEARTBEAT_INTERVAL = 60`, `MAX_RECONNECT_ATTEMPTS = 3`, Backoff `[5, 15, 30]`. Pingt nur, wenn aktive Downloads in der Queue sind
+- Cloud calls: timeout 30s, 3 attempts, exponential backoff
+- JDownloader monitoring: 5s polling active / 300s idle, `max_duration = 30*60` (30 minutes)
+- Heartbeat: `HEARTBEAT_INTERVAL = 60`, `MAX_RECONNECT_ATTEMPTS = 3`, backoff `[5, 15, 30]`. Pings only when there are active downloads in the queue
 
-### Fehlerbehandlung im Download-Loop
+### Error handling in the download loop
 
-`_fetch_links_from_cloud()` fängt `httpx.RequestError` ab, um den Retry nicht zu brechen. Unerwartete Fehler brechen den Retry ab. Bei Änderungen beides im Blick behalten — zu breites Fangen verdeckt Fehler, zu schmales verschwendet Wiederholungen.
+`_fetch_links_from_cloud()` catches `httpx.RequestError` so that the retry is not broken. Unexpected errors abort the retry. Keep both in mind when changing it — catching too broadly hides errors, catching too narrowly wastes repetitions.
 
-Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert. Sie stammt aus einem Base64-Payload und wird ungeprüft in `GET /api/v1/links/{release_id}` interpoliert. Der frühere `by-source`-Zweig (mit `source_url`/`hoster`-Param) ist entfernt — im Backend existiert dieser Pfad nicht, siehe `../AGENTS.md`.
+The `release_id` is encoded into the path segment with `quote(..., safe="")`. It comes from a base64 payload and is interpolated into `GET /api/v1/links/{release_id}` without validation. The former `by-source` branch (with the `source_url`/`hoster` parameter) has been removed — this path does not exist in the backend, see `../AGENTS.md`.
 
-### Der Warteschlaf folgt dem Paketzustand, nicht dem Poll-Erfolg
+### The sleep follows the package state, not the poll success
 
-`_monitor_jdownloader()` wählt zwischen `active_interval` (5s) und `idle_interval` (300s) über das Flag `matched`. Das ist ein **Zustand des Monitorings**, kein Ergebnis des einzelnen Poll-Aufrufs, und lebt deshalb außerhalb der `while`-Schleife.
+`_monitor_jdownloader()` chooses between `active_interval` (5s) and `idle_interval` (300s) via the flag `matched`. That is a **state of the monitoring**, not the result of the single poll call, and therefore lives outside the `while` loop.
 
-Die Regel dahinter: **ein Poll-Fehler sagt nichts über den Paketzustand.** Bis zum 2026-10-19 schlief der `except`-Zweig immer 300s, auch während ein Download lief — ein einzelner ausgesetzter JDownloader frozeerte die Fortschrittsanzeige für fünf Minuten und verbrauchte den Rest der 30-Minuten-Frist (#477). Beide Zweige wählen den Abstand jetzt aus demselben `matched`.
+The rule behind it: **a poll error says nothing about the package state.** Until 2026-10-19 the `except` branch always slept 300s, even while a download was running — a single unresponsive JDownloader froze the progress display for five minutes and consumed the rest of the 30-minute deadline (#477). Both branches now choose the interval from the same `matched`.
 
-`matched` wird nur zurückgesetzt, wenn `get_packages()` **erfolgreich** war und das Paket darin nicht mehr enthalten war. Ein Fehler beim Abruf darf den Zustand nicht löschen. Wer das Flag am Anfang jeder Iteration zurücksetzt, baut genau den alten Fehler in anderer Form — die letzte bekannte Paketsicht geht dann beim ersten Poll-Fehler verloren.
+`matched` is only reset when `get_packages()` was **successful** and the package was no longer contained in it. An error during the fetch must not delete the state. Anyone resetting the flag at the start of every iteration builds exactly the old error in another form — the last known view of the package is then lost at the first poll error.
 
-### Division im Fortschritt
+### Division in the progress
 
-`_monitor_jdownloader()` rechnet `(bytesLoaded / bytesTotal) * 100`. JDownloader meldet `bytesTotal: 0`, solange die Gesamtgröße des Pakets nicht feststeht — der Wert ist also **normal**, nicht nur ein Ausnahmefall. Ohne den `if bytes_total > 0`-Schutz entsteht eine `ZeroDivisionError`, die vom breiten `except Exception` unten im Loop geschluckt wird; anschließend wartet der Handler bis zum nächsten Poll, bei laufendem Download also 5s statt 300s.
+`_monitor_jdownloader()` computes `(bytesLoaded / bytesTotal) * 100`. JDownloader reports `bytesTotal: 0` as long as the total size of the package is not known — the value is therefore **normal**, not just an edge case. Without the `if bytes_total > 0` guard a `ZeroDivisionError` arises, which is swallowed by the broad `except Exception` further down in the loop; the handler then waits until the next poll, so with a running download 5s instead of 300s.
 
 ## Verification
 
@@ -210,31 +210,31 @@ cd bridge && poetry run ruff check app/
 poetry run python -m pytest tests/ -q
 ```
 
-⚠️ **`python -m pytest`, nicht das `pytest`-Skript** — siehe die sys.path-Falle im Parent-Doc. Gegenprobe:
+⚠️ **`python -m pytest`, not the `pytest` script** — see the sys.path trap in the parent doc. Counter-check:
 
 ```bash
 python -c "import app.sabnzbd_api as m; print(m.__file__)"
 ```
 
-Für echte Verbindungsdiagnose: `jd_test.py` (manueller JDownloader-Connect-Smoke, ruft `asyncio.run()` beim Import auf — nicht pytest-fähig).
+For a real connection diagnostic: `jd_test.py` (manual JDownloader connect smoke, calls `asyncio.run()` at import — not pytest-capable).
 
-Abgedeckt von `tests/`:
+Covered by `tests/`:
 
-| Datei | Bereich |
+| File | Area |
 | --- | --- |
-| `test_bridge_auth.py` | `require_bridge_key`: alle Routen außer `/health` |
-| `test_api_dispatch_auth.py` | Key-Prüfung am `/api`-Dispatch, inkl. `compare_digest`-Aufruf |
-| `test_queue_transitions.py` | `_move_to_history`, Persistenz über Neustart, `mode=retry` |
-| `test_cloud_links.py` | URL-Bildung aus `release_id`, Fortschrittsberechnung |
-| `test_state_restore.py` | State-Restore über Modulimport, Roundtrip |
-| `test_monitor_intervals.py` | Warteschlaf-Wahl in `_monitor_jdownloader` (5s/300s, Fehlerzweig, Verschwinden des Pakets) |
-| `test_webui.py` | Oberfläche: Setup-Token, Anmeldung, Session, Speichern, Reset, Geheimnisse |
-| `test_smoke.py` | Platzhalter (`assert True`) |
+| `test_bridge_auth.py` | `require_bridge_key`: all routes except `/health` |
+| `test_api_dispatch_auth.py` | Key check at the `/api` dispatch, including the `compare_digest` call |
+| `test_queue_transitions.py` | `_move_to_history`, persistence across a restart, `mode=retry` |
+| `test_cloud_links.py` | URL construction from `release_id`, progress calculation |
+| `test_state_restore.py` | State restore across module import, roundtrip |
+| `test_monitor_intervals.py` | Sleep choice in `_monitor_jdownloader` (5s/300s, error branch, disappearing package) |
+| `test_webui.py` | UI: setup token, login, session, saving, reset, secrets |
+| `test_smoke.py` | Placeholder (`assert True`) |
 
-`test_monitor_intervals.py` füllt `app.sabnzbd_api.download_queue` **direkt** und ersetzt weder `asyncio.sleep` noch die Zeitquelle des Handlers dauerhaft — siehe die `fresh_import()`-Warnung im Parent-Doc. Die 30-Minuten-Frist wird über einen Kontextmanager gestellt, der `asyncio.get_event_loop()` nur während des Handler-Aufrufs ersetzt: eine Attrappe auf `loop.time` allein genügt nicht, weil der Event-Loop `self.time()` selbst aufruft und die Zählung um einen Durchlauf verschöbe.
+`test_monitor_intervals.py` fills `app.sabnzbd_api.download_queue` **directly** and replaces neither `asyncio.sleep` nor the time source of the handler permanently — see the `fresh_import()` warning in the parent doc. The 30-minute deadline is set via a context manager that replaces `asyncio.get_event_loop()` only during the handler call: a dummy on `loop.time` alone is not enough, because the event loop calls `self.time()` itself and the count would be off by one iteration.
 
-Weiterhin **ohne** Tests: JDownloader-Verbindung, Heartbeat, `queue_persistence`.
+Still **without** tests: JDownloader connection, heartbeat, `queue_persistence`.
 
 ## Child DOX Index
 
-Keine Untergrenze.
+No lower bound.

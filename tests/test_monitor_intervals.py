@@ -1,23 +1,24 @@
-"""Warteschlaf im JDownloader-Monitoring (#477).
+"""Sleep interval in the JDownloader monitoring (#477).
 
-`_monitor_jdownloader()` wählt den Abstand zwischen zwei Polls über `matched`:
-5 s bei laufendem Download, 300 s sonst. Bis zum Fix schlief der `except`-Zweig
-**immer** 300 s — ein einzelner ausgesetzter JDownloader frozeerte damit ein
-laufendes Paket für fünf Minuten und verbrauchte den Rest der 30-Minuten-Frist.
+`_monitor_jdownloader()` chooses the interval between two polls via `matched`:
+5 s while a download is running, 300 s otherwise. Before the fix the `except`
+branch **always** slept 300 s — a single unresponsive JDownloader therefore
+froze a running package for five minutes and burned the rest of the 30-minute
+deadline.
 
-Zwei Punkte aus `../AGENTS.md` sind hier Vertrag:
+Two points from `../AGENTS.md` are contract here:
 
-- **Kein `fresh_import()`.** Der Handler greift über eine Modul-Referenz auf
-  `download_queue` zu. Ein neu importiertes Modul hätte ein anderes Dict, der
-  Auftrag fehlte, die Schleife kehrte sofort zurück und der Test wäre
-  stillschweigend grün. Deshalb wird `app.sabnzbd_api.download_queue` direkt
-  befüllt.
-- **Verhalten, nicht Quelltext.** Beobachtet wird der gewählte Warteschlaf, nicht
-  irgendeine Zeile im Code.
+- **No `fresh_import()`.** The handler accesses `download_queue` through a
+  module reference. A newly imported module would have a different dict, the
+  job would be missing, the loop would return immediately and the test would
+  silently stay green. Therefore `app.sabnzbd_api.download_queue` is filled
+  directly.
+- **Behaviour, not source text.** What is observed is the chosen sleep
+  interval, not some line in the code.
 
-Die 30-Minuten-Frist wird über eine Attrappe für die Loop-Uhr ersetzt, sonst
-würde der echte `sleep(300)` den Test unbrauchbar machen. Der Ablauf bleibt
-echt: `_monitor_jdownloader()` läuft vollständig, nur die Zeit ist gestellt.
+The 30-minute deadline is replaced by a decoy for the loop clock, otherwise
+the real `sleep(300)` would make the test useless. The flow stays real:
+`_monitor_jdownloader()` runs completely, only time is staged.
 """
 
 import asyncio
@@ -32,7 +33,7 @@ ACTIVE = 5
 IDLE = 300
 
 NZO_ID = "nzo-test-477"
-PAKET_NAME = "Mein.Release.2024.GRP"
+PAKET_NAME = "My.Release.2024.GRP"
 
 
 def _paket(finished=False, name=PAKET_NAME):
@@ -46,10 +47,10 @@ def _paket(finished=False, name=PAKET_NAME):
 
 
 class _JDownloaderStub:
-    """Liefert die Paketliste Durchlauf für Durchlauf aus.
+    """Delivers the package list iteration after iteration.
 
-    Ein `Exception`-Eintrag wird geworfen, nicht zurückgegeben — so lässt sich
-    der Fehlerzweig des Monitorings gezielt auslösen.
+    An `Exception` entry is raised, not returned — that way the error branch
+    of the monitoring can be triggered on purpose.
     """
 
     def __init__(self, abfolge):
@@ -67,7 +68,7 @@ class _JDownloaderStub:
 
 
 class _Uhr:
-    """Ersetzt die Zeitquelle so, dass genau `durchlaeufe` Iterationen laufen."""
+    """Replaces the time source so that exactly `durchlaeufe` iterations run."""
 
     def __init__(self, durchlaeufe: int):
         self._durchlaeufe = durchlaeufe
@@ -76,23 +77,23 @@ class _Uhr:
 
     def time(self) -> float:
         if self._erster_aufruf:
-            # Bildet die Frist: 0 + 1800 s
+            # Represents the deadline: 0 + 1800 s
             self._erster_aufruf = False
             return 0.0
         if self._geprueft >= self._durchlaeufe:
-            return 1801.0  # Frist überschritten → die Schleife endet
+            return 1801.0  # Deadline exceeded → the loop ends
         self._geprueft += 1
         return 0.0
 
 
 @contextmanager
 def _gestellte_zeit(durchlaeufe):
-    """Stellt die Zeit nur für den Handler, nicht für den Event-Loop.
+    """Stages the time only for the handler, not for the event loop.
 
-    Der Loop ruft `self.time()` ebenfalls auf (`_run_once`) — und zwar *vor* dem
-    Handler-Callback. Eine Attrappe auf `loop.time` würde deshalb um einen
-    Durchlauf verrutschen und der Monitor liefie nie in die Schleife. Stattdessen
-    wird der Zugriff ersetzt, den ausschließlich `_monitor_jdownloader` hat.
+    The loop calls `self.time()` as well (`_run_once`) — and that *before* the
+    handler callback. A decoy on `loop.time` would therefore shift by one
+    iteration and the monitor would never enter the loop. Instead the access
+    is replaced that only `_monitor_jdownloader` has.
     """
     uhr = _Uhr(durchlaeufe)
 
@@ -109,12 +110,12 @@ def _gestellte_zeit(durchlaeufe):
 
 
 def _kette_starten(loop, coroutine):
-    """Führt `coroutine` aus und räumt den Loop wieder ab.
+    """Runs `coroutine` and cleans the loop up again.
 
-    Die Tests sind bewusst synchron: `_monitor_jdownloader()` braucht keinen echten
-    Warteschlaf, weil `_gestellte_zeit` und der `sleep`-Attrappe das Warten ersetzen.
-    So ist sichergestellt, dass während des Durchlaufs kein fremder Loop-Zugriff
-    auf die Zeitattrappe stolpert.
+    The tests are deliberately synchronous: `_monitor_jdownloader()` needs no
+    real sleep, because `_gestellte_zeit` and the `sleep` decoy replace the
+    waiting. That way it is guaranteed that no foreign loop access stumbles
+    over the time decoy during the run.
     """
     asyncio.set_event_loop(loop)
     try:
@@ -125,32 +126,31 @@ def _kette_starten(loop, coroutine):
 
 
 def _monitoren(monkeypatch, abfolge, durchlaeufe=1):
-    """Führt den echten `_monitor_jdownloader` aus und gibt die Wartezeiten zurück.
+    """Runs the real `_monitor_jdownloader` and returns the sleep times.
 
-    `abfolge` beschreibt, was `get_packages()` je Durchlauf liefert — eine
-    Liste von Paket-Dicts, oder ein `Exception`-Objekt zum Auslösen des
-    Fehlerzweigs.
+    `abfolge` describes what `get_packages()` returns per iteration — a list
+    of package dicts, or an `Exception` object to trigger the error branch.
     """
     schlafzeiten = []
 
     async def schlafe(sekunden):
-        # Kein echtes Warten: die Zeit ist gestellt, die Schleife läuft
-        # synchron durch und wird von `_Uhr` beendet.
+        # No real waiting: the time is staged, the loop runs through
+        # synchronously and is ended by `_Uhr`.
         schlafzeiten.append(sekunden)
 
     jdownloader = _JDownloaderStub(abfolge)
     loop = asyncio.new_event_loop()
 
     monkeypatch.setattr(download_handler_modul, "jdownloader", jdownloader)
-    # Die drei Queue-Funktionen schreiben in den echten Zustand; hier geht es
-    # nur um den Warteschlaf.
+    # The three queue functions write to the real state; here only the sleep
+    # interval matters.
     monkeypatch.setattr(download_handler_modul, "update_progress", lambda *a, **kw: None)
     monkeypatch.setattr(download_handler_modul, "complete_download", lambda *a, **kw: None)
     monkeypatch.setattr(download_handler_modul, "fail_download", lambda *a, **kw: None)
     monkeypatch.setattr(asyncio, "sleep", schlafe)
 
-    # `download_queue` ist die echte Referenz aus `app.sabnzbd_api` — genau
-    # deshalb darf hier nicht neu importiert werden.
+    # `download_queue` is the real reference from `app.sabnzbd_api` — that is
+    # exactly why nothing may be re-imported here.
     sabnzbd_api.download_queue[NZO_ID] = SimpleNamespace(
         nzo_id=NZO_ID, filename=PAKET_NAME, status="Downloading"
     )
@@ -164,14 +164,14 @@ def _monitoren(monkeypatch, abfolge, durchlaeufe=1):
 
 
 class TestAbstandOhneFehler:
-    """Der Normalfall: JDownloader antwortet."""
+    """The normal case: JDownloader responds."""
 
     def test_ohne_laufenden_download_der_lange_abstand(self, monkeypatch):
         schlafzeiten, _ = _monitoren(monkeypatch, [[]])
 
         assert schlafzeiten == [IDLE], (
-            "Ohne sichtbares Paket sind 300 s korrekt — weicht der Test hier ab, "
-            "ist die Attrappe kaputt und der Test sagt nichts mehr aus"
+            "Without a visible package 300 s is correct - if the test deviates "
+            "here, the decoy is broken and the test no longer says anything"
         )
 
     def test_bei_laufendem_download_der_kurze_abstand(self, monkeypatch):
@@ -180,45 +180,45 @@ class TestAbstandOhneFehler:
         assert schlafzeiten == [ACTIVE]
 
     def test_ist_das_paket_verschwunden_waehrt_der_abstand_zurueck(self, monkeypatch):
-        """JDownloader antwortet, das Paket ist aber nicht mehr dabei.
+        """JDownloader responds, but the package is no longer in the list.
 
-        `matched` muss dann wieder auf `False` stehen — sonst pollt der
-        Monitor bis zum Ablauf der Frist alle 5 s ein totes Paket.
+        `matched` must then be `False` again — otherwise the monitor polls a
+        dead package every 5 s until the deadline expires.
         """
         schlafzeiten, jdownloader = _monitoren(monkeypatch, [[_paket()], []], durchlaeufe=2)
 
-        assert jdownloader.aufrufe == 2, "Beide Durchläufe müssen stattgefunden haben"
+        assert jdownloader.aufrufe == 2, "Both iterations must have happened"
         assert schlafzeiten == [ACTIVE, IDLE]
 
 
 class TestAbstandBeiFehler:
-    """Der eigentliche Befund aus #477."""
+    """The actual finding from #477."""
 
     def test_fehler_bei_laufendem_download_schlaeft_kurz(self, monkeypatch):
-        """Erster Durchlauf sieht das Paket, der zweite wirft.
+        """The first iteration sees the package, the second one raises.
 
-        Der Fehlerzweig muss den kurzen Abstand wählen: der Download lief
-        nachweislich, ein einzelner Poll-Fehler sagt nichts über seinen Zustand.
+        The error branch must choose the short interval: the download was
+        demonstrably running, a single poll error says nothing about its state.
         """
         schlafzeiten, jdownloader = _monitoren(
-            monkeypatch, [[_paket()], RuntimeError("JDownloader nicht erreichbar")], durchlaeufe=2
+            monkeypatch, [[_paket()], RuntimeError("JDownloader not reachable")], durchlaeufe=2
         )
 
-        assert jdownloader.aufrufe == 2, "Beide Durchläufe müssen stattgefunden haben"
+        assert jdownloader.aufrufe == 2, "Both iterations must have happened"
         assert schlafzeiten == [ACTIVE, ACTIVE], (
-            f"Geschlafen wurde {schlafzeiten}, erwartet [5, 5]. "
-            "Der Fehlerzweig friert den laufenden Download ein (#477)"
+            f"Slept for {schlafzeiten}, expected [5, 5]. "
+            "The error branch freezes the running download (#477)"
         )
 
     def test_fehler_ohne_bisherigen_download_schlaeft_lang(self, monkeypatch):
-        """Gegenrichtung — ohne je ein Paket gesehen zu haben, ist nichts über
-        einen laufenden Download bekannt, also bleibt der lange Abstand."""
-        schlafzeiten, _ = _monitoren(monkeypatch, [RuntimeError("JDownloader nicht erreichbar")])
+        """The opposite direction — without ever having seen a package, nothing
+        is known about a running download, so the long interval stays."""
+        schlafzeiten, _ = _monitoren(monkeypatch, [RuntimeError("JDownloader not reachable")])
 
         assert schlafzeiten == [IDLE]
 
     def test_dauernde_fehler_bei_laufendem_download_bleiben_kurz(self, monkeypatch):
-        """Auch nach mehreren Fehlern darf der Abstand nicht kippen."""
+        """Even after several errors the interval must not flip."""
         fehler = [RuntimeError("nope")] * 3
         schlafzeiten, _ = _monitoren(monkeypatch, [[_paket()], *fehler], durchlaeufe=4)
 
@@ -226,20 +226,20 @@ class TestAbstandBeiFehler:
 
 
 class TestAbbruch:
-    """Der Monitor endet auch, wenn der Auftrag aus der Queue verschwindet."""
+    """The monitor also ends when the job disappears from the queue."""
 
     def test_ohne_auftrag_in_der_queue_kein_warteschlaf(self, monkeypatch):
         jdownloader = _JDownloaderStub([[_paket()]])
         loop = asyncio.new_event_loop()
 
         async def schlafe(_sekunden):
-            raise AssertionError("Ohne Auftrag darf kein Warteschlaf stattfinden")
+            raise AssertionError("Without a job no sleep may take place")
 
         monkeypatch.setattr(download_handler_modul, "jdownloader", jdownloader)
         monkeypatch.setattr(download_handler_modul, "update_progress", lambda *a, **kw: None)
         monkeypatch.setattr(asyncio, "sleep", schlafe)
 
-        # `NZO_ID` ist absichtlich nicht in der Queue.
+        # `NZO_ID` is deliberately not in the queue.
         _kette_starten(loop, DownloadHandler()._monitor_jdownloader(NZO_ID, PAKET_NAME))
 
-        assert jdownloader.aufrufe == 0, "Der Monitor hat trotzdem abgefragt"
+        assert jdownloader.aufrufe == 0, "The monitor queried anyway"

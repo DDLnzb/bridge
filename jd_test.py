@@ -8,7 +8,7 @@ async def main():
     try:
         await jd.connect()
         devices = await jd.get_devices()
-        print("Login OK, Geraete:", [d["name"] for d in devices.get("list", [])])
+        print("Login OK, devices:", [d["name"] for d in devices.get("list", [])])
     finally:
         await jd.disconnect()
 

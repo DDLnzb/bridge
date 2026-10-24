@@ -155,15 +155,14 @@ class MyJDownloaderAPI:
         return True
 
     async def reconfigure(self) -> bool:
-        """Mit den aktuellen Konfigurationswerten neu verbinden.
+        """Reconnect with the current configuration values.
 
-        Wird nach dem Speichern der Konfiguration ueber die Web-Oberflaeche
-        aufgerufen: die Zugangsdaten koennen sich geaendert haben, und der
-        bestehende `myjdapi`-Client haelt die alten Werte bis zum Neustart.
+        Called after saving the configuration via the web UI: the credentials
+        may have changed, and the existing `myjdapi` client keeps the old
+        values until a restart.
 
-        Gibt `True` zurueck, wenn die Verbindung steht **und** das konfigurierte
-        Geraet gefunden wurde - beides wird von der Oberflaeche als "verbunden"
-        angezeigt.
+        Returns `True` if the connection is up **and** the configured device was
+        found - the web UI shows both as "connected".
         """
         await self.disconnect()
 
@@ -173,7 +172,7 @@ class MyJDownloaderAPI:
         self._client.set_app_key(config.MYJD_APP_KEY)
 
         if not self.email or not self.password:
-            logger.warning("JDownloader credentials not configured - keine Verbindung")
+            logger.warning("JDownloader credentials not configured - no connection")
             return False
 
         try:

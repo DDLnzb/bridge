@@ -1,11 +1,11 @@
-"""Web-Oberflaeche der Bridge: Auth, Ersteinrichtung, Speichern, Geheimnisse.
+"""Web UI of the bridge: auth, initial setup, saving, secrets.
 
-Deckt ab:
-- die Ersteinrichtung ueber den Setup-Token (inkl. Ablehnung ohne Token)
-- die Anmeldung mit dem Bridge-Key und das Session-Cookie
-- das Speichern der Konfiguration und die sofortige Wirkung
-- den Schutz der Geheimnisse (nicht zurueckgespiegelt, leer = unveraendert)
-- den Schutz der schreibenden Endpunkte ohne gueltige Session
+Covers:
+- the initial setup via the setup token (including rejection without token)
+- the login with the bridge key and the session cookie
+- saving the configuration and its immediate effect
+- the protection of secrets (not mirrored back, empty = unchanged)
+- the protection of the writing endpoints without a valid session
 """
 
 import pytest
@@ -21,7 +21,7 @@ TOKEN = "test-setup-token"
 
 @pytest.fixture(autouse=True)
 def settings_file(tmp_path, monkeypatch):
-    """Settings-Datei im tmp-Verzeichnis - die echte Datei bleibt unberuehrt."""
+    """Settings file in the tmp directory - the real file stays untouched."""
     path = tmp_path / "settings.json"
     monkeypatch.setenv("DDLNZB_SETTINGS_FILE", str(path))
     return path
@@ -29,10 +29,10 @@ def settings_file(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def restore_config():
-    """Die globale Config nach dem Test zuruecksetzen.
+    """Resets the global config after the test.
 
-    `config` ist ein Modul-Global; `config.reload()` in den Routen wuerde die
-    Werte sonst in den naechsten Test hineintragen.
+    `config` is a module global; `config.reload()` in the routes would
+    otherwise carry the values over into the next test.
     """
     snapshot = {name: getattr(config, name) for name in ENV_SOURCES}
     yield
@@ -42,7 +42,7 @@ def restore_config():
 
 @pytest.fixture
 def client(monkeypatch):
-    """Testclient mit konfiguriertem Key."""
+    """Test client with a configured key."""
     monkeypatch.setenv("DDLNZB_API_KEY", KEY)
     config.reload()
     return TestClient(app)
@@ -50,26 +50,26 @@ def client(monkeypatch):
 
 @pytest.fixture
 def client_ohne_key(monkeypatch):
-    """Testclient ohne konfigurierten Key - die Ersteinrichtung ist aktiv."""
+    """Test client without a configured key - the initial setup is active."""
     monkeypatch.delenv("DDLNZB_API_KEY", raising=False)
     config.reload()
     return TestClient(app)
 
 
 def _login(client) -> None:
-    """Anmelden und das Session-Cookie mitnehmen."""
+    """Logs in and keeps the session cookie."""
     antwort = client.post("/ui/login", data={"key": KEY}, follow_redirects=False)
     assert antwort.status_code == 303
 
 
-# --------------------------------------------------------------- Startseite
+# -------------------------------------------------------------- Start page
 
 
 def test_startseite_zeigt_setup_wenn_kein_key(client_ohne_key):
     antwort = client_ohne_key.get("/ui")
 
     assert antwort.status_code == 200
-    assert "Ersteinrichtung" in antwort.text
+    assert "Setup" in antwort.text
     assert "setup_token" in antwort.text
 
 
@@ -77,8 +77,8 @@ def test_startseite_zeigt_login_wenn_key_gesetzt_aber_keine_session(client):
     antwort = client.get("/ui")
 
     assert antwort.status_code == 200
-    assert "Anmeldung" in antwort.text
-    assert "Bridge einrichten" not in antwort.text
+    assert "Login" in antwort.text
+    assert "Set up the bridge" not in antwort.text
 
 
 def test_startseite_zeigt_dashboard_mit_session(client):
@@ -87,22 +87,22 @@ def test_startseite_zeigt_dashboard_mit_session(client):
     antwort = client.get("/ui")
 
     assert antwort.status_code == 200
-    assert "Bridge einrichten" in antwort.text
+    assert "Set up the bridge" in antwort.text
     assert "JDownloader" in antwort.text
 
 
-# ------------------------------------------------------------ Ersteinrichtung
+# ---------------------------------------------------------- Initial setup
 
 
 def test_setup_ohne_token_wird_abgelehnt(client_ohne_key):
     antwort = client_ohne_key.post(
         "/ui/setup",
-        data={"setup_token": "falsch", "api_key": KEY},
+        data={"setup_token": "wrong", "api_key": KEY},
         follow_redirects=False,
     )
 
     assert antwort.status_code == 401
-    assert "Ungueltiger Setup-Token" in antwort.text
+    assert "Invalid setup token" in antwort.text
 
 
 def test_setup_mit_token_speichert_key_und_meldet_an(client_ohne_key, settings_file, monkeypatch):
@@ -119,7 +119,7 @@ def test_setup_mit_token_speichert_key_und_meldet_an(client_ohne_key, settings_f
     assert config.DDLNZB_API_KEY == KEY
     assert settings_file.exists()
     assert KEY in settings_file.read_text(encoding="utf-8")
-    # Der Token ist verbraucht und darf nicht wiederverwendet werden.
+    # The token is used up and must not be reusable.
     assert webui._SETUP_TOKEN is None
 
 
@@ -139,7 +139,7 @@ def test_setup_ohne_api_key_wird_abgelehnt(client_ohne_key, monkeypatch):
 def test_setup_nach_konfiguration_nicht_mehr_moeglich(client):
     antwort = client.post(
         "/ui/setup",
-        data={"setup_token": TOKEN, "api_key": "anderer-key"},
+        data={"setup_token": TOKEN, "api_key": "other-key"},
         follow_redirects=False,
     )
 
@@ -147,14 +147,14 @@ def test_setup_nach_konfiguration_nicht_mehr_moeglich(client):
     assert config.DDLNZB_API_KEY == KEY
 
 
-# ------------------------------------------------------------------ Anmeldung
+# ------------------------------------------------------------------- Login
 
 
 def test_login_mit_falschem_key_wird_abgelehnt(client):
-    antwort = client.post("/ui/login", data={"key": "falsch"}, follow_redirects=False)
+    antwort = client.post("/ui/login", data={"key": "wrong"}, follow_redirects=False)
 
     assert antwort.status_code == 401
-    assert "Ungueltiger API-Key" in antwort.text
+    assert "Invalid API key" in antwort.text
 
 
 def test_login_setzt_session_cookie(client):
@@ -162,7 +162,7 @@ def test_login_setzt_session_cookie(client):
 
     assert antwort.status_code == 303
     assert "ddlnzb_ui" in antwort.cookies
-    # Das Cookie darf den Key selbst nicht enthalten.
+    # The cookie must not contain the key itself.
     assert KEY not in antwort.cookies["ddlnzb_ui"]
 
 
@@ -172,10 +172,10 @@ def test_logout_beendet_die_session(client):
     antwort = client.post("/ui/logout", follow_redirects=False)
 
     assert antwort.status_code == 303
-    assert "Bridge einrichten" not in client.get("/ui").text
+    assert "Set up the bridge" not in client.get("/ui").text
 
 
-# ------------------------------------------------------------------- Schreiben
+# ---------------------------------------------------------------- Writing
 
 
 def test_speichern_ohne_session_wird_abgelehnt(client):
@@ -197,19 +197,19 @@ def test_speichern_mit_session_speichert_und_wirkt(client, settings_file):
     assert antwort.headers["location"] == "/ui?flash=saved"
     assert config.DOWNLOAD_DIR == "/downloads"
     assert config.EXTRACT_ARCHIVES is True
-    # Ein abgesetzter Haken ist ein Wert, kein leeres Feld.
+    # An unchecked checkbox is a value, not an empty field.
     assert config.DELETE_ARCHIVES is False
     assert "EXTRACT_ARCHIVES" in settings_file.read_text(encoding="utf-8")
 
 
 def test_leeres_secret_feld_behaelt_den_gespeicherten_wert(client, settings_file):
     _login(client)
-    client.post("/ui/settings", data={"api_key": "neuer-key"}, follow_redirects=False)
+    client.post("/ui/settings", data={"api_key": "new-key"}, follow_redirects=False)
 
     antwort = client.post("/ui/settings", data={"api_key": "", "download_dir": "/dl"}, follow_redirects=False)
 
     assert antwort.status_code == 303
-    assert config.DDLNZB_API_KEY == "neuer-key"
+    assert config.DDLNZB_API_KEY == "new-key"
 
 
 def test_reset_loescht_die_ueberschreibungen(client, settings_file):
@@ -224,26 +224,26 @@ def test_reset_loescht_die_ueberschreibungen(client, settings_file):
     assert not settings_file.exists()
 
 
-# ---------------------------------------------------------------- Geheimnisse
+# ----------------------------------------------------------------- Secrets
 
 
 def test_geheimnisse_werden_nicht_zurueckgespiegelt(client):
     _login(client)
     client.post(
         "/ui/settings",
-        data={"api_key": "top-secret-key", "myjd_password": "top-secret-passwort"},
+        data={"api_key": "top-secret-key", "myjd_password": "top-secret-password"},
         follow_redirects=False,
     )
 
     antwort = client.get("/ui")
 
     assert "top-secret-key" not in antwort.text
-    assert "top-secret-passwort" not in antwort.text
-    assert "unveraendert" in antwort.text
+    assert "top-secret-password" not in antwort.text
+    assert "unchanged" in antwort.text
 
 
 def test_dashboard_zeigt_die_api_url_nicht_als_eingabefeld(client):
-    """Die API-URL bringt der Bridge mit - sie ist kein Feld im Formular."""
+    """The bridge brings the API URL with it - it is not a field in the form."""
     _login(client)
 
     antwort = client.get("/ui")

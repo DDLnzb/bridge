@@ -1,16 +1,15 @@
-"""Cloud-Link-Abruf und Fortschrittsberechnung im Download-Handler.
+"""Cloud link retrieval and progress calculation in the download handler.
 
-Deckt #374 ab (URL-Bildung gegen die Release-ID) und #384 ab
-(ZeroDivisionError bei `bytesTotal == 0`). Für den HTTP-Teil wird
-`httpx.AsyncClient` durch einen Mitschnitt ersetzt — es geht kein Request
-raus.
+Covers #374 (URL construction against the release ID) and #384
+(ZeroDivisionError with `bytesTotal == 0`). For the HTTP part,
+`httpx.AsyncClient` is replaced by a recorder — no request goes out.
 
-Wichtig: hier wird bewusst **nicht** neu importiert. `download_handler` hält
-eine Modul-Referenz auf `download_queue`; ein Re-Import von `app.sabnzbd_api`
-würde ein neues Dict erzeugen, und der Handler sähe den Testeintrag nicht.
-Das würde den Test stillschweigend grün färben. Stattdessen wird genau das Dict
-befüllt, das auch der Handler sieht — abgesichert über die Prüfung, dass
-`get_packages` wirklich aufgerufen wurde.
+Important: here we deliberately do **not** re-import. `download_handler` holds
+a module reference to `download_queue`; a re-import of `app.sabnzbd_api`
+would create a new dict, and the handler would not see the test entry.
+That would silently turn the test green. Instead exactly the dict is filled
+that the handler also sees — safeguarded by the check that `get_packages`
+really was called.
 """
 
 import pytest
@@ -50,12 +49,12 @@ class _MitschnittClient:
 
 
 class _LoopVerlassen(Exception):
-    """Signal: der Monitoring-Loop hat mindestens einen Durchlauf geschafft."""
+    """Signal: the monitoring loop completed at least one iteration."""
 
 
 @pytest.fixture
 def aufrufe(monkeypatch):
-    """Fängt jeden Cloud-Aufruf ab und liefert einen Link zurück."""
+    """Captures every cloud call and returns a link."""
     aufrufe = []
 
     def _client_factory(*args, **kwargs):
@@ -67,7 +66,7 @@ def aufrufe(monkeypatch):
 
 @pytest.fixture
 def queue_eintrag():
-    """Legt einen Queue-Eintrag an - in genau dem Dict, das der Handler sieht."""
+    """Creates a queue entry — in exactly the dict that the handler sees."""
     download_queue.clear()
     download_queue["nzo-jd"] = QueueItem(
         nzo_id="nzo-jd",
@@ -79,7 +78,7 @@ def queue_eintrag():
 
 
 async def _einen_durchlauf(monkeypatch, paket):
-    """Lässt den Monitoring-Loop genau einmal laufen und bricht danach ab."""
+    """Lets the monitoring loop run exactly once and aborts afterwards."""
     abrufe = []
 
     async def _packages():
@@ -96,11 +95,11 @@ async def _einen_durchlauf(monkeypatch, paket):
         await download_handler._monitor_jdownloader("nzo-jd", PAKETT_NAME)
 
     assert len(abrufe) == 1, (
-        "Der Monitoring-Loop hat den Eintrag nicht gesehen - der Test prueft nichts"
+        "The monitoring loop did not see the entry - the test checks nothing"
     )
 
 
-# --- #374: URL-Bildung ---------------------------------------------------
+# --- #374: URL construction ------------------------------------------------
 
 
 async def test_cloud_url_nimmt_die_release_id(aufrufe):
@@ -111,30 +110,30 @@ async def test_cloud_url_nimmt_die_release_id(aufrufe):
 
 
 async def test_cloud_url_sendet_keine_query_parameter(aufrufe):
-    """Der Mirror-Filter gehörte zu einem by-source-Pfad, den es nicht gibt."""
+    """The mirror filter belonged to a by-source path that does not exist."""
     await download_handler._fetch_links_from_cloud(RELEASE_ID)
 
     assert "params" not in aufrufe[0], (
-        "Es werden Query-Parameter an einen Endpunkt geschickt, der sie nicht kennt"
+        "Query parameters are sent to an endpoint that does not know them"
     )
 
 
 async def test_release_id_wird_ins_pfadsegment_kodiert(aufrufe):
-    """Ungeprüfter Payload-Inhalt landet sonst unkodiert im Pfad."""
+    """Unchecked payload content would otherwise land unencoded in the path."""
     await download_handler._fetch_links_from_cloud("../../admin?x=1")
 
     assert aufrufe[0]["url"].endswith("/api/v1/links/..%2F..%2Fadmin%3Fx%3D1")
 
 
 async def test_leere_release_id_ruft_die_api_nicht(aufrufe):
-    """Früher ging das in den by-source-Zweig und endete in einem 404."""
+    """Earlier this went into the by-source branch and ended in a 404."""
     links = await download_handler._fetch_links_from_cloud("")
 
     assert links == []
-    assert aufrufe == [], "Ohne Release-ID darf kein Request rausgehen"
+    assert aufrufe == [], "Without a release ID no request may go out"
 
 
-# --- #384: Fortschrittsberechnung ---------------------------------------
+# --- #384: progress calculation -------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -165,7 +164,7 @@ async def test_fortschritt_ueberlebt_ungueltige_gesamtgroesse(
 
 
 async def test_fehlende_gesamtgroesse_bricht_den_handler_nicht_ab(monkeypatch, queue_eintrag):
-    """Ohne bytesTotal hängt die Division durch Null den ganzen Loop auf."""
+    """Without bytesTotal the division by zero stalls the whole loop."""
     await _einen_durchlauf(monkeypatch, {"name": PAKETT_NAME, "bytesLoaded": 10})
 
     assert queue_eintrag.percentage == 20

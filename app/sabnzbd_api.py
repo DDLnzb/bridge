@@ -1,7 +1,7 @@
 """
 DDLnzb Bridge - SABnzbd-compatible API
 
-Implements SABnzbd API endpoints for compatibility mit *arr apps.
+Implements SABnzbd API endpoints for compatibility with the *arr apps.
 """
 
 import base64
@@ -29,15 +29,15 @@ router = APIRouter()
 download_queue: dict[str, "QueueItem"] = {}
 download_history: dict[str, "HistoryItem"] = {}
 
-# --- SABnzbd-Status-Vokabular ------------------------------------------
+# --- SABnzbd status vocabulary --------------------------------------------
 
-#: Die Werte aus `SabnzbdDownloadStatus` (Sonarr/Radarr,
+#: The values from `SabnzbdDownloadStatus` (Sonarr/Radarr,
 #: `src/NzbDrone.Core/Download/Clients/Sabnzbd/SabnzbdDownloadStatus.cs`).
 #:
-#: Newtonsoft bricht beim Deserialisieren die **gesamte** Queue- bzw.
-#: History-Antwort ab, sobald ein Slot einen Wert ausserhalb dieses Vokabulars
-#: traegt - nicht nur den einen Eintrag. Der Download-Client ist dann fuer die
-#: *arr-App komplett tot (#659).
+#: Newtonsoft aborts the deserialization of the **entire** queue or history
+#: response as soon as a slot carries a value outside this vocabulary - not
+#: just that one entry. The download client is then completely dead for the
+#: *arr app (#659).
 SAB_STATUS_QUEUED = "Queued"
 SAB_STATUS_DOWNLOADING = "Downloading"
 SAB_STATUS_COMPLETED = "Completed"
@@ -64,16 +64,16 @@ SAB_STATUSES = frozenset(
     }
 )
 
-#: Die Fortschrittstexte des Download-Handlers -> SABnzbd-Status.
+#: The progress texts of the download handler -> SABnzbd status.
 #:
-#: `download_handler.py` schreibt an mehreren Stellen freie Texte
-#: ("Fetching links...", "Downloading via JDownloader..."). Die Texte selbst
-#: bleiben erhalten - im Feld `message` des Slots. Der `status` traegt nur noch
-#: einen Wert aus `SAB_STATUSES`.
+#: `download_handler.py` writes free texts in several places
+#: ("Fetching links...", "Downloading via JDownloader..."). The texts
+#: themselves are preserved - in the `message` field of the slot. The `status`
+#: now only carries a value from `SAB_STATUSES`.
 #:
-#: "Starting download..." wird bewusst **nicht** zu "Queued": der
-#: Download-Handler nimmt nur Eintraege mit Status "Queued" an. Ein "Queued"
-#: dort wuerde den Eintrag sofort wieder aufnehmen.
+#: "Starting download..." is deliberately **not** mapped to "Queued": the
+#: download handler only accepts entries with the status "Queued". A "Queued"
+#: there would pick the entry up again immediately.
 _STATUS_TEXT_MAP = {
     "Starting download...": SAB_STATUS_DOWNLOADING,
     "Fetching links...": SAB_STATUS_DOWNLOADING,
@@ -86,11 +86,11 @@ _STATUS_TEXT_MAP = {
 
 
 def _sab_status(text: str | None) -> str:
-    """Freien Text in einen SABnzbd-Status ueberfuehren.
+    """Convert free text into a SABnzbd status.
 
-    Der Slot muss immer einen Wert aus `SAB_STATUSES` tragen. Ein unbekannter
-    Text landet in "Downloading" und wird geloggt - der Originaltext geht
-    nicht verloren, er steht im Feld `message` des Slots.
+    The slot must always carry a value from `SAB_STATUSES`. An unknown text
+    lands in "Downloading" and is logged - the original text is not lost, it
+    is in the `message` field of the slot.
     """
     if not text:
         return SAB_STATUS_QUEUED
@@ -100,7 +100,7 @@ def _sab_status(text: str | None) -> str:
     if bekannt is not None:
         return bekannt
     logger.warning(
-        "Unbekannter Bridge-Status %r - melde ihn als %s. In `app/AGENTS.md` nachziehen.",
+        "Unknown bridge status %r - reporting it as %s. Update `app/AGENTS.md`.",
         text,
         SAB_STATUS_DOWNLOADING,
     )
@@ -108,17 +108,17 @@ def _sab_status(text: str | None) -> str:
 
 
 def _format_size(size_bytes: int) -> str:
-    """Bytes als Text im SABnzbd-Format ("1500.00 MB")."""
+    """Bytes as text in the SABnzbd format ("1500.00 MB")."""
     if not size_bytes:
         return "0 MB"
     return f"{size_bytes / (1024 * 1024):.2f} MB"
 
 
 def _bytes_aus_groessen_text(text: str | None) -> int:
-    """Bytes aus einem Groessen-Text wie "1500.00 MB".
+    """Bytes from a size text like "1500.00 MB".
 
-    Nur fuer State-Dateien aus einer aelteren Bridge-Version: die speicherten
-    den Text, nicht die Bytes.
+    Only for state files from an older bridge version: those stored the
+    text, not the bytes.
     """
     if not text:
         return 0
@@ -136,11 +136,11 @@ def _bytes_aus_groessen_text(text: str | None) -> int:
 
 
 def _bekannte_felder(klasse: type, data: dict) -> dict:
-    """Nur Felder durchreichen, die die Klasse kennt.
+    """Only pass through the fields the class knows.
 
-    Eine State-Datei aus einer neueren Version (oder ein Rollback auf eine
-    aeltere) darf nicht den ganzen Zustand kosten: `_load_state()` faengt den
-    Fehler und behaelt dann eine leere Queue - ohne jede Fehlermeldung.
+    A state file from a newer version (or a rollback to an older one) must not
+    cost the whole state: `_load_state()` catches the error and then keeps an
+    empty queue - without any error message.
     """
     erlaubt = {f.name for f in fields(klasse)}
     return {k: v for k, v in data.items() if k in erlaubt}
@@ -163,7 +163,7 @@ def _deserialize_queue_item(data: dict) -> "QueueItem":
     if data.get("added_at"):
         data["added_at"] = datetime.fromisoformat(data["added_at"])
     if not data.get("size_bytes"):
-        # State-Datei aus einer aelteren Version: dort stand der Text.
+        # State file from an older version: it stored the text.
         data["size_bytes"] = _bytes_aus_groessen_text(data.get("size"))
     return QueueItem(**_bekannte_felder(QueueItem, data))
 
@@ -213,7 +213,7 @@ def _load_state() -> None:
 
 @dataclass
 class QueueItem:
-    """Item in der Download-Queue."""
+    """Item in the download queue."""
 
     nzo_id: str
     filename: str
@@ -224,15 +224,15 @@ class QueueItem:
     timeleft: str = "0:00:00"
     added_at: datetime = field(default_factory=datetime.utcnow)
 
-    #: Groesse in Bytes. Die **einzige** Quelle fuer die Groessenausgabe -
-    #: `size`/`sizeleft` (Text) und `mb`/`mbleft` (Zahl) werden daraus
-    #: abgeleitet. Zwei getrennt gefuehrte Werte sind der Grund, warum
-    #: `sizeleft` dauerhaft auf dem Startwert stehen blieb (#658).
+    #: Size in bytes. The **only** source for the size output - `size`/`sizeleft`
+    #: (text) and `mb`/`mbleft` (number) are derived from it. Two separately
+    #: maintained values are the reason why `sizeleft` permanently stayed at the
+    #: initial value (#658).
     size_bytes: int = 0
     sizeleft_bytes: int = 0
 
-    #: Der ausfuehrliche Fortschrittstext ("Fetching links..."). `status`
-    #: traegt ausschliesslich einen Wert aus `SAB_STATUSES` (#659).
+    #: The detailed progress text ("Fetching links..."). `status` carries
+    #: exclusively a value from `SAB_STATUSES` (#659).
     message: str = ""
 
     # DDLnzb specific
@@ -243,7 +243,7 @@ class QueueItem:
 
 @dataclass
 class HistoryItem:
-    """Item in der Download-Historie."""
+    """Item in the download history."""
 
     nzo_id: str
     name: str
@@ -254,26 +254,26 @@ class HistoryItem:
 
     size_bytes: int = 0
 
-    #: Detailtext zum Status - der Fehlertext bei `Failed`, der Klartext
-    #: bei "Links ohne JDownloader" (#659).
+    #: Detail text about the status - the error text on `Failed`, the plain
+    #: text for "links without JDownloader" (#659).
     message: str = ""
 
-    # DDLnzb spezifisch
+    # DDLnzb specific
     release_id: str | None = None
     payload: str | None = None
     links: list[str] = field(default_factory=list)
 
 
-# Muss nach QueueItem und HistoryItem stehen: _deserialize_queue_item und
-# _deserialize_history_item erzeugen Instanzen dieser beiden Klassen. Ein früherer
-# Aufruf läuft in einen NameError, der vom except-Handler in _load_state()
-# geschluckt wird - die Queue wäre dann stillschweigend leer.
+# Must come after QueueItem and HistoryItem: _deserialize_queue_item and
+# _deserialize_history_item create instances of these two classes. An earlier
+# call runs into a NameError, which is swallowed by the except handler in
+# _load_state() - the queue would then be silently empty.
 _load_state()
 
 
 @dataclass
 class PayloadInfo:
-    """Dekodierte Payload-Informationen."""
+    """Decoded payload information."""
 
     title: str
     source_url: str
@@ -311,14 +311,14 @@ async def sabnzbd_api(
     - delete: Delete from queue
     - retry: Retry failed download
 
-    Die nzo_id traegt der SABnzbd-Client im Parameter `value`
-    (`mode=delete&value=<nzo_id>`). Sonarr/Radarr schicken zusaetzlich
-    `name=delete` bei `mode=queue` und `mode=history`, um den Eintrag aus der
-    jeweiligen Liste zu entfernen. `nzo_id` bleibt als bridge-native Form
-    unterstuetzt (#657).
+    The nzo_id is carried by the SABnzbd client in the parameter `value`
+    (`mode=delete&value=<nzo_id>`). Sonarr/Radarr additionally send
+    `name=delete` with `mode=queue` and `mode=history` to remove the entry
+    from the respective list. `nzo_id` remains supported as the bridge-native
+    form (#657).
     """
 
-    # Auth check using configured bridge key
+    # Auth check using the configured bridge key
     if not config.DDLNZB_API_KEY:
         return _error_response("Bridge API key not configured", output)
 
@@ -353,9 +353,9 @@ async def sabnzbd_api(
         return _json_or_text({"categories": ["*"] + categories}, output)
 
     elif mode == "queue":
-        # Sonarr/Radarr entfernen einen Queue-Eintrag mit `mode=queue&name=delete`.
-        # Der reine Aufruf `mode=queue` bleibt das Listing - ein leeres
-        # `name` darf die Queue nicht leeren (#657).
+        # Sonarr/Radarr remove a queue entry with `mode=queue&name=delete`.
+        # The plain call `mode=queue` remains the listing - an empty `name`
+        # must not empty the queue (#657).
         if name == "delete":
             return _delete_item(value or nzo_id, output)
         return _get_queue(output)
@@ -400,11 +400,11 @@ def _error_response(message: str, output: str):
 
 
 def _queue_slot(item: "QueueItem") -> dict:
-    """Ein Queue-Slot im SABnzbd-Format.
+    """A queue slot in the SABnzbd format.
 
-    Sonarr/Radarr rechnen `TotalSize = mb * 1024 * 1024` und
-    `RemainingSize = mbleft * 1024 * 1024`. Ohne die Felder `mb` und `mbleft`
-    zeigen sie jede Groesse als 0 MB (#658).
+    Sonarr/Radarr compute `TotalSize = mb * 1024 * 1024` and
+    `RemainingSize = mbleft * 1024 * 1024`. Without the fields `mb` and
+    `mbleft` they show every size as 0 MB (#658).
     """
     return {
         "nzo_id": item.nzo_id,
@@ -424,11 +424,11 @@ def _queue_slot(item: "QueueItem") -> dict:
 
 
 def _history_slot(item: "HistoryItem") -> dict:
-    """Ein History-Slot im SABnzbd-Format.
+    """A history slot in the SABnzbd format.
 
-    Sonarr/Radarr lesen die Groesse aus `bytes` (Byte-Zahl) - ohne dieses Feld
-    ist `TotalSize` 0 (#658). Der Fehlertext steht in `fail_message`, das
-    uebernimmt der Client als `Message`.
+    Sonarr/Radarr read the size from `bytes` (byte count) - without this field
+    `TotalSize` is 0 (#658). The error text is in `fail_message`, which the
+    client takes over as `Message`.
     """
     return {
         "nzo_id": item.nzo_id,
@@ -554,11 +554,11 @@ def _delete_item(nzo_id: str, output: str):
 
 
 def _delete_history_item(nzo_id: str, output: str):
-    """Eintrag aus der History entfernen.
+    """Remove an entry from the history.
 
-    Sonarr/Radarr loeschen Historie-Eintraege ueber `mode=history&name=delete`
-    mit der nzo_id in `value`. `mode=delete` kennt nur die Queue - dort waere
-    ein Historie-Eintrag ein "Item not found" (#657).
+    Sonarr/Radarr delete history entries via `mode=history&name=delete` with
+    the nzo_id in `value`. `mode=delete` only knows the queue - a history
+    entry there would be an "Item not found" (#657).
     """
     if nzo_id in download_history:
         del download_history[nzo_id]
@@ -568,16 +568,16 @@ def _delete_history_item(nzo_id: str, output: str):
 
 
 def _retry_item(nzo_id: str, output: str):
-    """Download erneut versuchen."""
+    """Retry the download."""
     if nzo_id in download_history:
         item = download_history[nzo_id]
-        # Abgeschlossene Downloads dürfen nicht neu eingereiht werden: das Paket
-        # existiert im JDownloader-Entpackungsordner nicht mehr, der Wiederholungs-
-        # versuch würde fehlschlagen oder eine zweite Datei erzeugen.
+        # Completed downloads must not be queued again: the package no longer
+        # exists in the JDownloader extraction folder, the retry would fail or
+        # produce a second file.
         if item.status == SAB_STATUS_COMPLETED:
             return _error_response(f"Item already completed: {nzo_id}", output)
-        # Zurück in die Queue schieben. Links, Größe und sizeleft mitnehmen -
-        # ein Retry ohne Linkliste startet den Auftrag ohne nutzbare Quelle.
+        # Push back into the queue. Take links, size and sizeleft along - a
+        # retry without a link list starts the job without a usable source.
         queue_item = QueueItem(
             nzo_id=item.nzo_id,
             filename=item.name,
@@ -627,15 +627,15 @@ def _get_links_response(nzo_id: str | None, output: str):
 def _move_to_history(
     item: QueueItem, *, status: str, storage: str = "", message: str = ""
 ) -> HistoryItem:
-    """Queue-Eintrag in die Historie verschieben und den Zustand persistieren.
+    """Move the queue entry into the history and persist the state.
 
-    Einziger Übergangspunkt von `download_queue` nach `download_history`. Das
-    Persistieren steckt hier bewusst drin: drei getrennte Aufrufstellen haben
-    es bisher unterschiedlich gemacht, wodurch `fail_download` und
-    `mark_manual_download` ihren Eintrag bei jedem Neustart verloren haben.
+    The only transition point from `download_queue` to `download_history`.
+    Persisting is deliberately placed here: three separate call sites used to
+    do it differently, whereby `fail_download` and `mark_manual_download`
+    lost their entry on every restart.
 
-    `status` muss ein Wert aus `SAB_STATUSES` sein, `message` traegt den
-    ausfuehrlichen Text (#659).
+    `status` must be a value from `SAB_STATUSES`, `message` carries the
+    detailed text (#659).
     """
     history_item = HistoryItem(
         nzo_id=item.nzo_id,
@@ -656,10 +656,10 @@ def _move_to_history(
 
 
 def complete_download(nzo_id: str, storage_path: str = "", message: str = ""):
-    """Download abschließen und in History verschieben.
+    """Complete the download and move it into the history.
 
-    `storage_path` ist der Ablageort der fertigen Datei, `message` der
-    Klartext zum Vorgang (z. B. "Links available (3 URLs)").
+    `storage_path` is the storage location of the finished file, `message` the
+    plain text about the process (e.g. "Links available (3 URLs)").
     """
     if nzo_id in download_queue:
         _move_to_history(
@@ -671,11 +671,10 @@ def complete_download(nzo_id: str, storage_path: str = "", message: str = ""):
 
 
 def fail_download(nzo_id: str, error: str):
-    """Download als fehlgeschlagen markieren.
+    """Mark the download as failed.
 
-    Der Status ist `Failed`, der Fehlertext steht in `message` und wird als
-    `fail_message` ausgeliefert - Sonarr/Radarr uebernehmen ihn als
-    `Message` (#659).
+    The status is `Failed`, the error text is in `message` and is delivered as
+    `fail_message` - Sonarr/Radarr take it over as `Message` (#659).
     """
     if nzo_id in download_queue:
         _move_to_history(
@@ -693,15 +692,15 @@ def update_progress(
     bytes_loaded: int | None = None,
     bytes_total: int | None = None,
 ) -> None:
-    """Download-Fortschritt aktualisieren.
+    """Update the download progress.
 
-    `status` ist der freie Klartext ("Fetching links...", "Downloading via
-    JDownloader..."). Der Slot fuehrt den SABnzbd-kompatiblen Status, der Text
-    wandert in `message` (#659).
+    `status` is the free plain text ("Fetching links...", "Downloading via
+    JDownloader..."). The slot carries the SABnzbd-compatible status, the text
+    moves into `message` (#659).
 
-    `bytes_loaded`/`bytes_total` kommen aus JDownloader. Sind sie gesetzt, ist
-    die Restgroesse der tatsaechliche Rest; sonst wird sie aus dem
-    Fortschritt abgeleitet (#658).
+    `bytes_loaded`/`bytes_total` come from JDownloader. If they are set, the
+    remaining size is the actual remainder; otherwise it is derived from the
+    progress (#658).
     """
     if nzo_id not in download_queue:
         return
@@ -714,10 +713,10 @@ def update_progress(
 
 
 def set_item_size(item: QueueItem, size_bytes: int) -> None:
-    """Groesse eines Queue-Eintrags setzen.
+    """Set the size of a queue entry.
 
-    Der Download-Handler kennt die Groesse aus dem Payload. Ohne sie bleiben
-    `mb` und `mbleft` bei 0 und Sonarr/Radarr zeigen 0 MB (#658).
+    The download handler knows the size from the payload. Without it `mb` and
+    `mbleft` stay 0 and Sonarr/Radarr show 0 MB (#658).
     """
     item.size_bytes = size_bytes
     item.sizeleft_bytes = size_bytes
@@ -726,11 +725,11 @@ def set_item_size(item: QueueItem, size_bytes: int) -> None:
 def _set_sizeleft(
     item: QueueItem, *, bytes_loaded: int | None = None, bytes_total: int | None = None
 ) -> None:
-    """Restgroesse des Eintrags fortschreiben.
+    """Write the remaining size of the entry.
 
-    Sonarr/Radarr rechnen `RemainingSize = mbleft * 1024 * 1024`. Bleibt
-    `sizeleft` auf dem Startwert stehen, ist die Restanzeige dauerhaft
-    falsch - auch wenn der Download laeuft (#658).
+    Sonarr/Radarr compute `RemainingSize = mbleft * 1024 * 1024`. If `sizeleft`
+    stays at the initial value, the remaining display is permanently wrong -
+    even while the download is running (#658).
     """
     if bytes_total and bytes_loaded is not None and bytes_total > 0:
         rest = max(0, bytes_total - bytes_loaded)
@@ -750,7 +749,7 @@ def mark_manual_download(nzo_id: str, message: str):
 
 
 def _enqueue_payload(payload: str, nzbname: str | None, category: str | None) -> QueueItem:
-    """Create queue item inkl. Payload und Metadaten."""
+    """Create a queue item including payload and metadata."""
     info = decode_payload(payload)
     nzo_id = f"SABnzbd_nzo_{uuid.uuid4().hex[:12]}"
     filename = nzbname or info.title if info else (nzbname or nzo_id)
@@ -784,7 +783,7 @@ def _extract_payload_from_url(url: str) -> str | None:
 
 
 def _extract_payload_from_nzb(data: bytes) -> str | None:
-    """Extract payload marker aus Fake-NZB Datei."""
+    """Extract the payload marker from a fake NZB file."""
     try:
         text = data.decode("utf-8", errors="ignore")
     except Exception:
