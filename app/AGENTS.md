@@ -64,6 +64,8 @@ If `DDLNZB_API_KEY` is missing, the lifespan only logs `logger.warning("DDLnzb A
 
 Since 23.10.2026 there is a way out: the web UI `/ui` shows the setup form in this state and accepts the API key there (with the setup token from the log). The process therefore still starts, but can be brought **via the UI** into a working state without touching the `.env`.
 
+Since 24.10.2026 the settings file is applied **at startup** as well (see below): a bridge whose key was entered in the UI does not lose that key with the next restart - it comes back from `data/settings.json`, and no setup token is generated.
+
 ### The config is changeable at runtime
 
 `BridgeConfig` is a module global that is read in many places **at call time** (`config.DDLNZB_API_KEY` in `sabnzbd_api.py` and `main.py`, `config.DOWNLOAD_DIR` in `download_handler.py`). Therefore a change takes effect immediately, without a restart.
@@ -71,9 +73,24 @@ Since 23.10.2026 there is a way out: the web UI `/ui` shows the setup form in th
 Two prerequisites for this:
 
 1. **`ENV_SOURCES` in `config.py` is the only source of truth** for field name, env name and default. The dataclass fields therefore no longer have their own defaults — `__post_init__` resolves them from the environment. Anyone adding a field must enter it there; otherwise the value never takes effect.
-2. **`config.reload()`** reads the environment anew and layers the overrides of the settings file on top. This is the only entry point for the UI.
+2. **`config.reload()`** reads the environment anew and layers the overrides of the settings file on top. It is the common entry point for the **startup** (the lifespan calls it as its first statement) and for the **web UI** (after a save).
 
 Exceptions that need a restart: `LOG_LEVEL` (only effective in the `logging.basicConfig` in the lifespan) and `STATE_FILE`/`DATA_DIR` (the paths are formed in module constants at module import time, among others `sabnzbd_api.STATE_PATH`).
+
+### The settings file applies at startup, not only after a UI write
+
+Until 24.10.2026 the settings file was read **only** by the write routes of the web UI. After a restart of the container the bridge started with the environment alone: the API key was empty, a setup token went into the log and every call of the *arr apps was answered with 401 — although the file was mounted and the documentation promised the opposite (#715).
+
+The file is applied in two places:
+
+| Place | When | Why |
+| --- | --- | --- |
+| `BridgeConfig.__post_init__` | at import time | a freshly created config already carries the file |
+| `config.reload()` | as the first statement of the lifespan | the **first** decision that depends on the configuration — the health check of the API, the connection to JDownloader and the setup token — sees the file |
+
+`settings.load()` filters the content to `settings.FIELD_TYPES`: a broken file is logged and ignored, it never prevents the start. The precedence stays `settings file > environment > default`.
+
+⚠️ **`CORS_ORIGINS` is environment-only.** The settings file only carries the fields from `FIELD_TYPES` — the CORS allowlist is not among them, so it can only be set via `BRIDGE_CORS_ORIGINS`. That is deliberate: the allowlist decides which browser origins may talk to the bridge at all, and a web form must not be able to widen it.
 
 ### The web UI (`webui.py`)
 
@@ -175,9 +192,17 @@ Two traps:
 - `mode=delete` only knows the **queue**. A history entry is deleted via
   `mode=history&name=delete`.
 
-### CORS is configured unsafely
+### CORS: an explicit allowlist, no reflection of the request origin
 
-`main.py` sets `allow_origins=["*"]` **together with** `allow_credentials=True`. This combination is unsafe. The bridge listens on `127.0.0.1` by default, but on `0.0.0.0` in the Docker image.
+`main.py` registers `CORSMiddleware` with `allow_origins=list(config.CORS_ORIGINS)`, `allow_credentials=False` and a restricted method and header list.
+
+Until 24.10.2026 it was `allow_origins=["*"]` **together with** `allow_credentials=True`. That combination is unsafe in Starlette: the origin of the request is **reflected** — no allowlist takes place. The only thing that still protected the web UI was the `SameSite=Strict` attribute of its session cookie (#720).
+
+The bridge needs **no** CORS at all: the *arr apps are not browsers, and the web UI is served from the same origin as the API. The default is therefore an **empty** allowlist — then a foreign origin receives neither `access-control-allow-origin` nor `access-control-allow-credentials`, and its preflight ends with 400.
+
+`BRIDGE_CORS_ORIGINS` (comma separated) is the explicit way to open the list for a deployment that operates the UI from another origin. The field `CORS_ORIGINS` is in `ENV_SOURCES` with the default `()`.
+
+⚠️ **The allowlist is read when the module builds the app.** A change of the environment therefore needs a restart of the process — and a test that changes it has to reload `app.main` afterwards.
 
 ### Time limits are hardcoded
 
@@ -229,6 +254,8 @@ Covered by `tests/`:
 | `test_state_restore.py` | State restore across module import, roundtrip |
 | `test_monitor_intervals.py` | Sleep choice in `_monitor_jdownloader` (5s/300s, error branch, disappearing package) |
 | `test_webui.py` | UI: setup token, login, session, saving, reset, secrets |
+| `test_settings_startup.py` | The settings file is applied at startup: key effective without a UI write, no setup token, precedence against the environment, broken file |
+| `test_cors_policy.py` | CORS policy: a foreign origin gets no header, a preflight is refused, a configured origin is allowed |
 | `test_smoke.py` | Placeholder (`assert True`) |
 
 `test_monitor_intervals.py` fills `app.sabnzbd_api.download_queue` **directly** and replaces neither `asyncio.sleep` nor the time source of the handler permanently — see the `fresh_import()` warning in the parent doc. The 30-minute deadline is set via a context manager that replaces `asyncio.get_event_loop()` only during the handler call: a dummy on `loop.time` alone is not enough, because the event loop calls `self.time()` itself and the count would be off by one iteration.

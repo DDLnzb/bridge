@@ -29,6 +29,16 @@ def _as_bool(raw: str) -> bool:
     return raw.lower() == "true"
 
 
+def _as_list(raw: str) -> tuple[str, ...]:
+    """Comma separated list of values.
+
+    Used for the CORS allowlist: `BRIDGE_CORS_ORIGINS="https://a, https://b"`.
+    A tuple instead of a list, so that the default cannot be mutated through
+    the config object.
+    """
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 # Single source of truth for field <-> environment variable <-> default.
 # `LOG_LEVEL` is `BRIDGE_LOG_LEVEL` in the environment - the names differ
 # historically and must not be unified without touching every deployment.
@@ -50,6 +60,10 @@ ENV_SOURCES: dict[str, tuple[str, Callable[[str], Any], Any]] = {
     "DELETE_ARCHIVES": ("DELETE_ARCHIVES", _as_bool, True),
     "STATE_FILE": ("DDLNZB_STATE_FILE", str, "./ddlnzb_bridge_state.json"),
     "DATA_DIR": ("DDLNZB_DATA_DIR", str, str(BASE_DIR / "data")),
+    # Explicit CORS allowlist (comma separated). Empty by default: the bridge
+    # needs no CORS at all - the *arr apps are not browsers and the web UI is
+    # served from the same origin. See `app/main.py`.
+    "CORS_ORIGINS": ("BRIDGE_CORS_ORIGINS", _as_list, ()),
 }
 
 
@@ -84,8 +98,16 @@ class BridgeConfig:
     STATE_FILE: str = "./ddlnzb_bridge_state.json"
     DATA_DIR: str = ""
 
+    # CORS allowlist - empty by default, see `ENV_SOURCES`.
+    CORS_ORIGINS: tuple[str, ...] = ()
+
     def __post_init__(self):
         self._apply_env()
+        # The settings file is applied **here**, at import time - not only when
+        # the web UI writes it. Without this the configuration entered via the
+        # UI was lost with every restart of the process (#715): the file was
+        # only read by `reload()`, which the UI routes call.
+        self.apply_overrides(settings_store.load())
         if self.CATEGORY_MAPPING is None:
             self.CATEGORY_MAPPING = {
                 "movies": "Movies",
@@ -129,8 +151,10 @@ class BridgeConfig:
     def reload(self) -> None:
         """Re-read the environment and layer the stored overrides on top.
 
-        This is the entry point for the web UI: after saving, the new
-        configuration takes effect immediately, without a restart.
+        This is the common entry point for the **startup** and for the web UI:
+        after saving, the new configuration takes effect immediately, without a
+        restart - and at startup the same precedence applies
+        (`settings file > environment > default`).
         """
         self._apply_env()
         self.apply_overrides(settings_store.load())

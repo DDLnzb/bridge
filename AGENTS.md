@@ -95,6 +95,23 @@ user tier. The bridge must therefore not poll aggressively.
 The `release_id` is encoded into the path segment with `quote(..., safe="")` — it
 comes from a base64 payload and is interpolated without validation.
 
+### The settings file counts at startup
+
+The bridge has three configuration layers: `settings file > environment > default`.
+The file is written by the web UI (`DDLNZB_DATA_DIR/settings.json`, mounted to
+`/app/data` in the image).
+
+Until 24.10.2026 the file was only read by the **write** routes of that UI: after
+a restart the bridge started with the environment alone — the key was empty, a
+setup token went into the log and every *arr call was answered with 401, although
+the file was mounted and the documentation promised the opposite (#715). The file
+is now applied in `BridgeConfig.__post_init__` and again in `config.reload()` at
+the start of the lifespan.
+
+The CORS allowlist (`BRIDGE_CORS_ORIGINS`) is the one setting that the settings
+file cannot reach — it is an environment-only value, so a web form can never
+widen the list of browser origins that may talk to the bridge.
+
 ### Payload format
 
 The backend generates a base64url-encoded string in
@@ -166,14 +183,27 @@ poetry run python -m pytest tests/ -v
 ```
 
 ⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The `bridge` job in
-`ci.yml` runs `poetry run pytest -v` — so the tests do run: 10 test files with
-74 test functions and 92 test cases (as of 23.10.2026). Covered are auth, API
+`ci.yml` runs `poetry run pytest -v` — so the tests do run: 12 test files with
+105 test cases (as of 24.10.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
 connection) and the web UI (`tests/test_webui.py`: initial setup with setup
 token, login and session, saving the configuration, reset, protection of
 secrets) plus the SABnzbd compatibility (`tests/test_sabnzbd_compat.py`:
 `value`/`name=delete`, size as numbers, status vocabulary).
+
+Two files came with the security review of 24.10.2026: `test_settings_startup.py`
+(the settings file is applied when the process starts — the key is effective
+without any UI write, no setup token is generated, the file wins over the
+environment) and `test_cors_policy.py` (a foreign origin receives no CORS
+header, its preflight is refused, a configured origin is allowed).
+
+`tests/test_deployment_contract.py` pins the deployment against the compose
+file of the production stack and the versioned `bridge/.env`. Since 24.10.2026
+it also holds the rule that **`environment` wins over `env_file`**: the API key
+must not appear in the `environment` section of the bridge service, because an
+empty entry there overwrites the key from `bridge/.env` with an empty string
+(#716). The bridge then starts without a key and rejects every SABnzbd call.
 
 Not tested is **`app/heartbeat.py::_heartbeat_loop`** — the heartbeat client.
 The two tests with "heartbeat" in their name (`test_bridge_auth.py`) only check
@@ -223,8 +253,8 @@ path and differed from the lockfile; it has been removed. **Do not create a
 second declaration** — Dependabot would scan both and produce duplicate PRs, of
 which only one changes the installed version.
 
-`prometheus-client` (>=0.24.1,<0.27.0) has been a bridge dependency since PR
-#210: `app/metrics.py` exports `ddlnzb_bridge_*`, and the monitoring stack
+`prometheus-client` (>=0.24.1,<0.27.0) has been a bridge dependency since
+PR #210: `app/metrics.py` exports `ddlnzb_bridge_*`, and the monitoring stack
 scrapes the bridge via `GET /metrics`.
 
 ## Child DOX Index

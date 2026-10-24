@@ -44,6 +44,13 @@ if config.LOG_LEVEL.upper() == "DEBUG":
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    # The settings file is applied **before** the first decision that depends
+    # on the configuration: the health check of the API, the connection to
+    # JDownloader and the setup token. Without this the configuration entered
+    # via the web UI was lost with every restart of the process - the file was
+    # only read by the write routes of the UI (#715).
+    config.reload()
+
     print(f"Starting DDLnzb Bridge on {config.BRIDGE_HOST}:{config.BRIDGE_PORT}")
     logger = logging.getLogger("ddlnzb.bridge")
     if not config.DDLNZB_API_KEY:
@@ -142,12 +149,22 @@ app = FastAPI(
 )
 
 # CORS
+#
+# The bridge needs **no** CORS: the *arr apps are not browsers, and the web UI
+# is served from the same origin as the API. `allow_origins=["*"]` together
+# with `allow_credentials=True` made Starlette reflect **every** origin - the
+# only thing that still protected the UI was the `SameSite=Strict` attribute
+# of the session cookie (#720).
+#
+# `BRIDGE_CORS_ORIGINS` (comma separated) is an explicit allowlist for the
+# case where the UI is operated from another origin. It is empty by default:
+# then no foreign origin is allowed at all.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(config.CORS_ORIGINS),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
 
