@@ -1,31 +1,32 @@
-"""SABnzbd-Kompatibilität der Bridge — Issues #657, #658, #659.
+"""SABnzbd compatibility of the bridge — Issues #657, #658, #659.
 
-Drei Verträge, die Sonarr/Radarr gegen die Bridge prüfen:
+Three contracts that Sonarr/Radarr check against the bridge:
 
-* **#657** — der Client schickt die nzo_id im Parameter `value` und entfernt
-  Einträge über `mode=queue&name=delete` bzw. `mode=history&name=delete`.
-  Die Bridge kannte nur `nzo_id` und kannte kein `name=delete`: Löschen aus
-  der History war unmöglich, ein `mode=queue` mit `name=delete` wäre in der
-  Bridge als reines Listing gelaufen.
-* **#658** — Sonarr/Radarr rechnen die Größe aus `mb`/`mbleft` (Queue) bzw.
-  `bytes` (History). Ohne diese Felder zeigen sie jede Datei als 0 MB.
-* **#659** — Newtonsoft bricht die **gesamte** Antwort ab, sobald ein Slot
-  einen Status ausserhalb des `SabnzbdDownloadStatus`-Vokabulars trägt. Der
-  freie Text ("Fetching links...") gehört deshalb in ein eigenes Feld.
+* **#657** — the client sends the nzo_id in the parameter `value` and removes
+  entries via `mode=queue&name=delete` respectively `mode=history&name=delete`.
+  The bridge only knew `nzo_id` and did not know `name=delete`: deleting from
+  the history was impossible, a `mode=queue` with `name=delete` would have run
+  as a plain listing in the bridge.
+* **#658** — Sonarr/Radarr calculate the size from `mb`/`mbleft` (queue)
+  respectively `bytes` (history). Without these fields they show every file
+  as 0 MB.
+* **#659** — Newtonsoft aborts the **entire** response as soon as a slot
+  carries a status outside the `SabnzbdDownloadStatus` vocabulary. The free
+  text ("Fetching links...") therefore belongs in a separate field.
 
-Geprüft wird Verhalten, nicht Quelltext: jeder Test geht über die HTTP-API,
-die ein *arr-Client benutzt.
+What is checked is behaviour, not source text: every test goes through the
+HTTP API that an *arr client uses.
 """
 
 import pytest
 from fastapi.testclient import TestClient
 
-# `app.sabnzbd_api` wird hier **einmalig auf Modulebene** gebunden. Die anderen
-# Testmodule rufen `fresh_import()` auf, das `app.sabnzbd_api` aus
-# `sys.modules` entfernt und neu importiert - ab da waere ein `import app.sabnzbd_api`
-# *innerhalb* einer Testfunktion ein anderes Modul als das, in dem `app.main`
-# den Router haengt. Die beiden Mengen waeren dann verschiedene Objekte und die
-# Tests liefeuern ins Leere.
+# `app.sabnzbd_api` is bound **once at module level** here. The other test
+# modules call `fresh_import()`, which removes `app.sabnzbd_api` from
+# `sys.modules` and re-imports it - from that point on an `import app.sabnzbd_api`
+# *inside* a test function would be a different module than the one in which
+# `app.main` mounts the router. The two sets would then be different objects
+# and the tests would run into the void.
 import app.sabnzbd_api as sab
 from app.config import config
 from app.main import app
@@ -36,11 +37,11 @@ GROSSE = 1500 * 1024 * 1024
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    """TestClient mit API-Key und einem State-Pfad im tmp-Verzeichnis.
+    """TestClient with API key and a state path in the tmp directory.
 
-    Der State-Pfad wird auf `app.sabnzbd_api.STATE_PATH` gesetzt, nicht über
-    die Env-Variable: `STATE_PATH` wird beim Modulimport gebildet und danach
-    nicht mehr neu gelesen.
+    The state path is set on `app.sabnzbd_api.STATE_PATH`, not via the env
+    variable: `STATE_PATH` is built at module import time and is not read
+    again afterwards.
     """
     monkeypatch.setattr(config, "DDLNZB_API_KEY", KEY)
     monkeypatch.setattr(sab, "STATE_PATH", tmp_path / "bridge_state.json")
@@ -52,7 +53,7 @@ def client(monkeypatch, tmp_path):
 
 
 def _queue_eintrag(nzo_id="nzo-1", size_bytes=GROSSE):
-    """Einen Queue-Eintrag anlegen (ohne HTTP - das ist der Ausgangszustand)."""
+    """Creates a queue entry (without HTTP - that is the initial state)."""
     item = sab.QueueItem(
         nzo_id=nzo_id,
         filename="Some.Release-GRP",
@@ -74,11 +75,11 @@ def _history_slots(client):
     return antwort.json()["history"]["slots"]
 
 
-# --- #657: value und name=delete ----------------------------------------
+# --- #657: value and name=delete ------------------------------------------
 
 
 def test_queue_delete_per_value_entfernt_den_eintrag(client):
-    """`mode=queue&name=delete&value=<nzo_id>` nimmt den Eintrag aus der Queue."""
+    """`mode=queue&name=delete&value=<nzo_id>` removes the entry from the queue."""
     _queue_eintrag("nzo-1")
 
     antwort = client.get(
@@ -91,7 +92,7 @@ def test_queue_delete_per_value_entfernt_den_eintrag(client):
 
 
 def test_queue_ohne_name_delete_bleibt_ein_listing(client):
-    """`mode=queue` ohne `name=delete` listet nur - die Queue bleibt stehen."""
+    """`mode=queue` without `name=delete` only lists - the queue stays."""
     _queue_eintrag("nzo-1")
 
     slots = _queue_slots(client)
@@ -101,7 +102,7 @@ def test_queue_ohne_name_delete_bleibt_ein_listing(client):
 
 
 def test_queue_delete_ohne_value_leert_die_queue_nicht(client):
-    """Ein `name=delete` ohne `value` darf nicht die ganze Queue leeren."""
+    """A `name=delete` without `value` must not empty the whole queue."""
     _queue_eintrag("nzo-1")
 
     antwort = client.get("/api", params={"mode": "queue", "name": "delete", "apikey": KEY})
@@ -111,7 +112,7 @@ def test_queue_delete_ohne_value_leert_die_queue_nicht(client):
 
 
 def test_history_delete_per_value_entfernt_den_eintrag(client):
-    """`mode=history&name=delete&value=<nzo_id>` nimmt den Eintrag aus der History."""
+    """`mode=history&name=delete&value=<nzo_id>` removes the entry from the history."""
     _queue_eintrag("nzo-1")
     sab.fail_download("nzo-1", "Hoster down")
     assert "nzo-1" in sab.download_history
@@ -126,7 +127,7 @@ def test_history_delete_per_value_entfernt_den_eintrag(client):
 
 
 def test_delete_per_value_entfernt_aus_der_queue(client):
-    """`mode=delete&value=<nzo_id>` funktioniert wie bisher - nur mit `value`."""
+    """`mode=delete&value=<nzo_id>` works as before - only with `value`."""
     _queue_eintrag("nzo-1")
 
     antwort = client.get("/api", params={"mode": "delete", "value": "nzo-1", "apikey": KEY})
@@ -136,7 +137,7 @@ def test_delete_per_value_entfernt_aus_der_queue(client):
 
 
 def test_retry_per_value_nimmt_den_eintrag_wieder_auf(client):
-    """`mode=retry&value=<nzo_id>` holt einen fehlgeschlagenen Download zurück."""
+    """`mode=retry&value=<nzo_id>` retrieves a failed download."""
     _queue_eintrag("nzo-1")
     sab.fail_download("nzo-1", "Hoster down")
 
@@ -147,11 +148,11 @@ def test_retry_per_value_nimmt_den_eintrag_wieder_auf(client):
     assert "nzo-1" not in sab.download_history
 
 
-# --- #658: Groesse in Zahlen --------------------------------------------
+# --- #658: size as numbers --------------------------------------------------
 
 
 def test_queue_slot_meldet_groesse_in_megabytes(client):
-    """`mb` und `mbleft` sind Zahlen - Sonarr/Radarr rechnen daraus die Groesse."""
+    """`mb` and `mbleft` are numbers - Sonarr/Radarr calculate the size from them."""
     _queue_eintrag("nzo-1", size_bytes=GROSSE)
 
     slot = _queue_slots(client)[0]
@@ -162,7 +163,7 @@ def test_queue_slot_meldet_groesse_in_megabytes(client):
 
 
 def test_sizeleft_schrumpft_mit_dem_fortschritt(client):
-    """`sizeleft` darf nicht dauerhaft auf dem Startwert stehen."""
+    """`sizeleft` must not stay on the initial value permanently."""
     _queue_eintrag("nzo-1", size_bytes=GROSSE)
 
     sab.update_progress("nzo-1", 40, "Downloading...")
@@ -173,7 +174,7 @@ def test_sizeleft_schrumpft_mit_dem_fortschritt(client):
 
 
 def test_sizeleft_nimmt_die_echten_restbytes(client):
-    """Sind echte Byte-Zahlen bekannt, ist die Restgroesse der tatsaechliche Rest."""
+    """If real byte numbers are known, the remaining size is the actual remainder."""
     _queue_eintrag("nzo-1", size_bytes=GROSSE)
 
     sab.update_progress(
@@ -189,7 +190,7 @@ def test_sizeleft_nimmt_die_echten_restbytes(client):
 
 
 def test_history_slot_meldet_bytes(client):
-    """Die History meldet die Groesse in Bytes unter `bytes`."""
+    """The history reports the size in bytes under `bytes`."""
     _queue_eintrag("nzo-1", size_bytes=GROSSE)
     sab.complete_download("nzo-1", "/downloads/Some.Release-GRP")
 
@@ -198,11 +199,11 @@ def test_history_slot_meldet_bytes(client):
     assert slot["size"] == "1500.00 MB"
 
 
-# --- #659: Status-Vokabular ---------------------------------------------
+# --- #659: status vocabulary -----------------------------------------------
 
 
-def test_jeder_queue_slot_trägt_einen_gültigen_status(client):
-    """Ein Status ausserhalb des Vokabulars killt die *gesamte* Antwort."""
+def test_every_queue_slot_has_a_valid_status(client):
+    """A status outside the vocabulary kills the *entire* response."""
     _queue_eintrag("nzo-1")
     sab.update_progress("nzo-1", 0, "Starting download...")
     sab.update_progress("nzo-1", 20, "Sending to JDownloader...")
@@ -217,7 +218,7 @@ def test_jeder_queue_slot_trägt_einen_gültigen_status(client):
 
 
 def test_der_freie_text_bleibt_im_message_feld(client):
-    """Der Klartext geht nicht verloren - er wandert in `message`."""
+    """The plain text does not get lost - it moves into `message`."""
     _queue_eintrag("nzo-1")
     sab.update_progress("nzo-1", 50, "Downloading via JDownloader...")
 
@@ -227,7 +228,7 @@ def test_der_freie_text_bleibt_im_message_feld(client):
 
 
 def test_fehlschlag_meldet_failed_mit_fehlermeldung(client):
-    """Ein Fehlschlag ist `Failed` - der Fehlertext steht in `fail_message`."""
+    """A failure is `Failed` - the error text stands in `fail_message`."""
     _queue_eintrag("nzo-1")
     sab.fail_download("nzo-1", "Hoster down")
 
@@ -238,7 +239,7 @@ def test_fehlschlag_meldet_failed_mit_fehlermeldung(client):
 
 
 def test_links_ohne_jdownloader_werden_completed_gemeldet(client):
-    """Der Erfolgsfall "Links bereit, kein JDownloader" ist `Completed`."""
+    """The success case "links ready, no JDownloader" is `Completed`."""
     _queue_eintrag("nzo-1")
     sab.update_progress("nzo-1", 100, "Links ready")
     sab.complete_download("nzo-1", "", "Links available (3 URLs)")
@@ -248,8 +249,8 @@ def test_links_ohne_jdownloader_werden_completed_gemeldet(client):
     assert slot["fail_message"] == "Links available (3 URLs)"
 
 
-def test_jeder_history_slot_trägt_einen_gültigen_status(client):
-    """Auch die History muss ausschliesslich gueltige Status liefern."""
+def test_every_history_slot_has_a_valid_status(client):
+    """The history must also deliver exclusively valid statuses."""
     _queue_eintrag("nzo-1")
     sab.fail_download("nzo-1", "Hoster down")
     _queue_eintrag("nzo-2")

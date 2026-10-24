@@ -1,14 +1,14 @@
-"""Zustandsübergänge der Queue.
+"""State transitions of the queue.
 
-Deckt #383 ab (Persistenz bei `fail_download` / `mark_manual_download`) und
-#385 ab (`mode=retry` bei abgeschlossenen Downloads und Verlust der Links).
+Covers #383 (persistence on `fail_download` / `mark_manual_download`) and
+#385 (`mode=retry` for completed downloads and lost links).
 
-Geprüft wird Verhalten, nicht Quelltext: jeder Test bewegt einen Eintrag, liest
-den Zustand neu aus der State-Datei und prüft das Ergebnis.
+What is checked is behaviour, not source text: every test moves an entry,
+reads the state again from the state file and checks the result.
 
-Mit #659 trägt `status` nur noch einen Wert aus dem SABnzbd-Vokabular; der
-ausführliche Text steht in `message`. Die Größe wird in Bytes geführt
-(`size_bytes`), nicht mehr als Text.
+With #659 `status` only carries one value from the SABnzbd vocabulary; the
+verbose text stands in `message`. The size is tracked in bytes
+(`size_bytes`), no longer as text.
 """
 
 import json
@@ -34,7 +34,7 @@ def _retry_payload(response):
     return json.loads(response.body)
 
 
-# --- #383: der Zustand muss einen Neustart überleben -------------------
+# --- #383: the state must survive a restart --------------------------------
 
 
 def test_fail_download_ueberlebt_den_neustart(fresh_import):
@@ -43,11 +43,11 @@ def test_fail_download_ueberlebt_den_neustart(fresh_import):
 
     module.fail_download("nzo-1", "Hoster down")
 
-    assert "nzo-1" not in module.download_queue, "Eintrag muss aus der Queue raus"
+    assert "nzo-1" not in module.download_queue, "Entry must leave the queue"
     reloaded = fresh_import()
     assert "nzo-1" in reloaded.download_history, (
-        "Fehlgeschlagener Download ist nach dem Neustart spurlos verschwunden - "
-        "fail_download() persistiert den Zustand nicht"
+        "The failed download has vanished without a trace after the restart - "
+        "fail_download() does not persist the state"
     )
     assert reloaded.download_history["nzo-1"].status == "Failed"
     assert reloaded.download_history["nzo-1"].message == "Hoster down"
@@ -66,7 +66,7 @@ def test_mark_manual_download_ueberlebt_den_neustart(fresh_import):
 
 
 def test_complete_download_ueberlebt_den_neustart(fresh_import):
-    """Regression: der gemeinsame Übergang darf complete_download nicht brechen."""
+    """Regression: the shared transition must not break complete_download."""
     module = fresh_import()
     _queue_item(module)
 
@@ -88,7 +88,7 @@ def test_historie_behaelt_die_links_aus_der_queue(fresh_import):
     assert module.download_history["nzo-1"].links == LINKS
 
 
-# --- #385: retry ---------------------------------------------------------
+# --- #385: retry -----------------------------------------------------------
 
 
 def test_retry_lehnt_abgeschlossene_downloads_ab(fresh_import):
@@ -101,9 +101,9 @@ def test_retry_lehnt_abgeschlossene_downloads_ab(fresh_import):
     assert payload["status"] is False
     assert payload["error"] == "Item already completed: nzo-1"
     assert "nzo-1" not in module.download_queue, (
-        "Ein abgeschlossener Download darf nicht erneut in die Queue"
+        "A completed download must not go back into the queue"
     )
-    assert "nzo-1" in module.download_history, "der Historieneintrag muss bestehen bleiben"
+    assert "nzo-1" in module.download_history, "the history entry must survive"
 
 
 def test_retry_nimmt_fehlgeschlagene_downloads_wieder_auf(fresh_import):
@@ -119,7 +119,7 @@ def test_retry_nimmt_fehlgeschlagene_downloads_wieder_auf(fresh_import):
 
 
 def test_retry_behaelt_links_und_groesse(fresh_import):
-    """Ohne übernommene Links startet der Wiederholungsversuch ohne Quelle."""
+    """Without carried-over links the retry starts without a source."""
     module = fresh_import()
     _queue_item(module, links=LINKS)
     module.fail_download("nzo-1", "Hoster down")

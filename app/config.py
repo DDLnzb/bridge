@@ -21,22 +21,21 @@ if ENV_PATH.exists():
 
 
 def _as_bool(raw: str) -> bool:
-    """Boolsche Umgebungsvariable. Nur "true" (case-insensitiv) ist wahr.
+    """Boolean environment variable. Only "true" (case-insensitive) is truthy.
 
-    Bewusst dieselbe Semantik wie vorher - ein Umstellen auf "1"/"yes" waere
-    eine stille Verhaltensaenderung fuer Deployments, die auf "true" setzen.
+    Deliberately the same semantics as before - switching to "1"/"yes" would be
+    a silent behavior change for deployments that set "true".
     """
     return raw.lower() == "true"
 
 
-# Eine Quelle der Wahrheit fuer Feld <-> Umgebungsvariable <-> Default.
-# `LOG_LEVEL` heisst in der Umgebung `BRIDGE_LOG_LEVEL` - die Namen sind
-# historisch verschieden und duerfen nicht vereinheitlicht werden, ohne alle
-# Deployments anzufassen.
+# Single source of truth for field <-> environment variable <-> default.
+# `LOG_LEVEL` is `BRIDGE_LOG_LEVEL` in the environment - the names differ
+# historically and must not be unified without touching every deployment.
 ENV_SOURCES: dict[str, tuple[str, Callable[[str], Any], Any]] = {
-    # Der Bridge bringt die API-URL selbst mit - sie ist kein Eingabefeld der
-    # Oberflaeche. Per `DDLNZB_API_URL` ueberschreibbar, z. B. mit
-    # `http://api:8000` im Docker-Netzwerk oder `http://localhost:8000` lokal.
+    # The bridge ships the API URL itself - it is not an input field of the
+    # web UI. Overridable via `DDLNZB_API_URL`, e.g. with `http://api:8000`
+    # in the Docker network or `http://localhost:8000` locally.
     "DDLNZB_API_URL": ("DDLNZB_API_URL", str, "https://ddlnzb.pages.dev/api/app"),
     "DDLNZB_API_KEY": ("DDLNZB_API_KEY", str, ""),
     "BRIDGE_HOST": ("BRIDGE_HOST", str, "127.0.0.1"),
@@ -102,10 +101,10 @@ class BridgeConfig:
             }
 
     def _apply_env(self) -> None:
-        """Alle Felder aus der Umgebung neu aufloesen.
+        """Re-resolve all fields from the environment.
 
-        Eine leere Umgebungsvariable gilt als "nicht gesetzt" - sonst wuerde
-        etwa `DDLNZB_API_URL=""` die Bridge auf eine leere URL laufen lassen.
+        An empty environment variable counts as "not set" - otherwise
+        `DDLNZB_API_URL=""` would run the bridge against an empty URL.
         """
         for field_name, (env_name, cast, default) in ENV_SOURCES.items():
             raw = os.getenv(env_name)
@@ -113,10 +112,10 @@ class BridgeConfig:
             setattr(self, field_name, value)
 
     def apply_overrides(self, overrides: dict[str, Any]) -> None:
-        """Gespeicherte Overrides auf das Objekt legen.
+        """Apply the stored overrides onto the object.
 
-        Unbekannte Schluessel werden ignoriert, leere Werte ebenfalls - ein
-        leerer Wert bedeutet "zurueck auf die Umgebungsvariable".
+        Unknown keys are ignored, empty values as well - an empty value means
+        "fall back to the environment variable".
         """
         for key, value in overrides.items():
             if key not in ENV_SOURCES:
@@ -128,10 +127,10 @@ class BridgeConfig:
             setattr(self, key, value)
 
     def reload(self) -> None:
-        """Umgebung neu lesen und die gespeicherten Overrides darueber legen.
+        """Re-read the environment and layer the stored overrides on top.
 
-        Das ist der Eintrittspunkt fuer die Web-Oberflaeche: nach dem Speichern
-        gilt die neue Konfiguration sofort, ohne Neustart.
+        This is the entry point for the web UI: after saving, the new
+        configuration takes effect immediately, without a restart.
         """
         self._apply_env()
         self.apply_overrides(settings_store.load())

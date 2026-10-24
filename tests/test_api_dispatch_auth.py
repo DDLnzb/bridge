@@ -1,13 +1,13 @@
-"""Authentifizierung am SABnzbd-Dispatch `/api` — Issue #478.
+"""Authentication on the SABnzbd dispatch `/api`.
 
-`main.py` verglich den Schlüssel bereits zeitkonstant
-(`secrets.compare_digest`), der Dispatch in `sabnzbd_api.py` dagegen mit `!=`.
-Beide Prüfungen schützen denselben Schlüssel; eine zeitkonstante Prüfung, die an
-einer Stelle fehlt, ist keine.
+`main.py` already compared the key in constant time
+(`secrets.compare_digest`), but the dispatch in `sabnzbd_api.py` used `!=`.
+Both checks protect the same key; a constant-time check that is missing in
+one place is no constant-time check.
 
-Der Verhaltenstest prüft deshalb nicht die Implementierung, sondern die
-vertragliche Eigenschaft: dass `/api` ohne oder mit falschem Key **nie** Daten
-liefert — und dass `mode=auth` mit dem richtigen Key freigibt.
+The behaviour test therefore does not inspect the implementation but the
+contractual property: that `/api` never returns data without a key or with a
+wrong key **at all** — and that `mode=auth` releases with the right key.
 """
 
 import secrets
@@ -43,18 +43,18 @@ def client_ohne_key(monkeypatch):
     ],
 )
 def test_falscher_key_wird_ueberall_abgewiesen(client, params):
-    antwort = client.get("/api", params={**params, "apikey": "falscher-key"})
+    antwort = client.get("/api", params={**params, "apikey": "wrong-key"})
 
     assert antwort.status_code == 200
     assert antwort.json()["status"] is False
 
 
 def test_fehlender_key_wird_abgewiesen(client):
-    """Ein fehlender Parameter ist ein `None` - kein leerer String.
+    """A missing parameter is a `None` — not an empty string.
 
-    Genau hier ist die Umstellung auf `compare_digest` wichtig: der Vergleich
-    darf nicht schon an einem `None` scheitern, sonst wäre ein leerer Key eine
-    Ausnahme statt einer Ablehnung.
+    This is exactly where the switch to `compare_digest` matters: the
+    comparison must not fail on a `None` already, otherwise an empty key
+    would be an exception instead of a rejection.
     """
     antwort = client.get("/api", params={"mode": "auth"})
 
@@ -68,7 +68,7 @@ def test_leerer_key_wird_abgewiesen(client):
 
 
 def test_ohne_konfigurierten_key_ist_nichts_erreichbar(client_ohne_key):
-    """Leere Konfiguration schließt komplett - sonst wäre der Bridge abschaltbar."""
+    """An empty configuration locks everything down — otherwise the bridge could be switched off."""
     antwort = client_ohne_key.get("/api", params={"mode": "auth", "apikey": ""})
 
     assert antwort.json()["status"] is False
@@ -81,30 +81,30 @@ def test_richtiger_key_schaltet_mode_auth_frei(client):
 
 
 def test_richtiger_key_liefert_echte_daten(client):
-    """Gegenprobe: die Sperre greift nicht pauschal - gültige Aufrufe kommen durch."""
+    """Counter-check: the lock is not applied wholesale — valid calls get through."""
     antwort = client.get("/api", params={"mode": "version", "apikey": KEY})
 
     assert antwort.json()["version"] == "4.0.0-ddlnzb"
 
 
 def test_kurzer_key_steht_nicht_vor_langem(client):
-    """Zeitkonstanter Vergleich: ein Präfix des richtigen Schlüssels genügt nicht."""
+    """Constant-time comparison: a prefix of the correct key is not enough."""
     antwort = client.get("/api", params={"mode": "auth", "apikey": KEY[:-1]})
 
     assert antwort.json()["status"] is False
 
 
 def test_vergleich_laeuft_ueber_compare_digest(client, monkeypatch):
-    """Der zeitkonstante Vergleich muss tatsächlich aufgerufen werden.
+    """The constant-time comparison must actually be called.
 
-    Alle Tests oben unterscheiden `!=` und `compare_digest` **nicht** - beide
-    liefern dieselbe Antwort, der Unterschied liegt nur in der Laufzeit. Ein
-    reiner Verhaltenstest kann die Regression also nicht sehen und wäre grün,
-    obwohl der Schlüssel wieder mit `!=` verglichen würde.
+    All the tests above do not distinguish `!=` from `compare_digest` — both
+    return the same answer, the difference lies only in the runtime. A pure
+    behaviour test therefore cannot see the regression and would stay green
+    even though the key would be compared with `!=` again.
 
-    Deshalb wird der Aufruf beobachtet statt das Ergebnis: die Funktion wird
-    durch eine Attrappe ersetzt, die das echte Ergebnis durchreicht und sich
-    dabei merkt, dass sie überhaupt beteiligt war.
+    That is why the call is observed instead of the result: the function is
+    replaced by a decoy that passes the real result through and notes in the
+    process that it was involved at all.
     """
     import app.sabnzbd_api as sabnzbd_api
 

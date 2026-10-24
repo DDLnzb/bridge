@@ -1,8 +1,8 @@
-"""Authentifizierung der Bridge-Routen außer `/api`.
+"""Authentication of the bridge routes outside `/api`.
 
-Deckt #389 ab: `/`, `/status` und `/heartbeat/reconnect` waren frei
-erreichbar. `/health` bleibt bewusst offen — Load-Balancer und der
-Docker-HEALTHCHECK müssen ihn ohne Zugangsdaten erreichen.
+Covers #389: `/`, `/status` and `/heartbeat/reconnect` were freely
+reachable. `/health` stays open on purpose — load balancers and the
+Docker HEALTHCHECK must reach it without credentials.
 """
 
 import pytest
@@ -30,7 +30,7 @@ def client_ohne_key(monkeypatch):
 def test_diagnoserouten_ohne_key_sind_gesperrt(client, pfad):
     assert client.get(pfad).status_code == 401
     assert client.get(pfad, headers={"X-API-Key": ""}).status_code == 401
-    assert client.get(pfad, headers={"X-API-Key": "falscher-key"}).status_code == 401
+    assert client.get(pfad, headers={"X-API-Key": "wrong-key"}).status_code == 401
 
 
 @pytest.mark.parametrize("pfad", ["/", "/status"])
@@ -42,8 +42,8 @@ def test_diagnoserouten_mit_key_sind_erreichbar(client, pfad):
 
 
 def test_status_liefert_keine_daten_ohne_key(client):
-    """Die Aufklärung ist der eigentliche Schaden - sie darf nicht durchsickern."""
-    antwort = client.get("/status", headers={"X-API-Key": "falscher-key"})
+    """The reconnaissance is the actual damage — it must not leak."""
+    antwort = client.get("/status", headers={"X-API-Key": "wrong-key"})
 
     assert antwort.status_code == 401
     assert "device_id" not in antwort.text
@@ -58,7 +58,7 @@ def test_heartbeat_reconnect_ist_gesperrt(client):
 
 
 def test_heartbeat_reconnect_mit_falschem_key_ist_gesperrt(client):
-    antwort = client.post("/heartbeat/reconnect", headers={"X-API-Key": "falscher-key"})
+    antwort = client.post("/heartbeat/reconnect", headers={"X-API-Key": "wrong-key"})
 
     assert antwort.status_code == 401
 
@@ -72,12 +72,12 @@ def test_health_bleibt_offen(client):
 
 @pytest.mark.parametrize("pfad", ["/", "/status"])
 def test_ohne_konfigurierten_key_ist_alles_gesperrt(client_ohne_key, pfad):
-    """Fehlende Konfiguration darf nicht zu offenem Zugang führen."""
+    """Missing configuration must not lead to open access."""
     assert client_ohne_key.get(pfad).status_code == 401
     assert client_ohne_key.get(pfad, headers={"X-API-Key": ""}).status_code == 401
 
 
 def test_apikey_query_param_wird_akzeptiert(client):
-    """Maschinenclients können keinen Header setzen - wie in sabnzbd_api.py."""
+    """Machine clients cannot set a header — as in sabnzbd_api.py."""
     assert client.get("/status", params={"apikey": KEY}).status_code == 200
-    assert client.get("/status", params={"apikey": "falsch"}).status_code == 401
+    assert client.get("/status", params={"apikey": "wrong"}).status_code == 401

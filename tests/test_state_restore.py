@@ -1,12 +1,12 @@
-"""Regressionstest fuer den State-Restore beim Bridge-Start.
+"""Regression test for the state restore at bridge start.
 
-Hintergrund: `_load_state()` stand in `sabnzbd_api.py` vor den Definitionen von
-`QueueItem` und `HistoryItem`. Die daraus entstehende `NameError` landet im
-`except Exception`-Handler von `_load_state()` selbst, der Import laeuft also
-sauber durch - aber Queue und Historie bleiben bei jedem Start leer.
+Background: `_load_state()` in `sabnzbd_api.py` stood before the definitions of
+`QueueItem` and `HistoryItem`. The resulting `NameError` lands in the
+`except Exception` handler of `_load_state()` itself, so the import runs
+cleanly - but queue and history stay empty on every start.
 
-Der Test schreibt eine State-Datei, importiert das Modul neu und prueft, dass
-der Zustand tatsaechlich ankommt. Kein Quelltext-Assert.
+The test writes a state file, re-imports the module and checks that the
+state actually arrives. No source-text assert.
 """
 
 import json
@@ -55,8 +55,8 @@ def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file, fre
     module = fresh_import()
 
     assert "nzo-restored-1" in module.download_queue, (
-        "Queue wurde nicht wiederhergestellt - der State-Import läuft vermutlich "
-        "vor den Dataclass-Definitionen und scheitert still"
+        "The queue was not restored - the state import probably runs "
+        "before the dataclass definitions and fails silently"
     )
     restored_queue_item = module.download_queue["nzo-restored-1"]
     assert restored_queue_item.filename == "Some.Release-GRP"
@@ -64,7 +64,7 @@ def test_queue_und_historie_werden_beim_import_wiederhergestellt(state_file, fre
     assert restored_queue_item.release_id == "11111111-2222-3333-4444-555555555555"
     assert restored_queue_item.links == ["https://example.invalid/file.bin"]
 
-    assert "nzo-history-1" in module.download_history, "Historie wurde nicht wiederhergestellt"
+    assert "nzo-history-1" in module.download_history, "The history was not restored"
     restored_history_item = module.download_history["nzo-history-1"]
     assert restored_history_item.name == "Old.Release-GRP"
     assert restored_history_item.storage == "/downloads"
@@ -80,7 +80,7 @@ def test_fehlende_state_datei_bricht_den_import_nicht(state_file, fresh_import):
 
 
 def test_kaputte_state_datei_wird_gefangen(state_file, fresh_import):
-    state_file.write_text("{kein gueltiges json", encoding="utf-8")
+    state_file.write_text("{not valid json", encoding="utf-8")
 
     module = fresh_import()
 

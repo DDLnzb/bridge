@@ -2,115 +2,161 @@
 
 ## Purpose
 
-Lokaler Dienst, der sich gegenüber Radarr/Sonarr/Lidarr/LazyLibrarian als **SABnzbd-kompatibler Download-Client** ausgibt. Er empfängt Fake-NZBs vom Backend, dekodiert die darin enthaltenen Payloads, holt die echten Links von der DDLnzb-API und reicht sie an My JDownloader weiter. Ohne JDownloader legt er die Links in der Queue ab.
+A local service that presents itself to Radarr/Sonarr/Lidarr/LazyLibrarian as a
+**SABnzbd-compatible download client**. It receives fake NZBs from the backend,
+decodes the payloads they carry, fetches the real links from the DDLnzb API and
+passes them on to My JDownloader. Without JDownloader it puts the links into the
+queue.
 
-Er spricht **kein** Usenet-Protokoll und lädt **keine** NZBs herunter.
+It speaks **no** Usenet protocol and downloads **no** NZB files.
 
-Über `http://<host>:6789/ui` lässt sich der Dienst vollständig konfigurieren — der Setup-Token steht im Container-Log, sobald noch kein API-Key gesetzt ist.
+The service is configured completely via `http://<host>:6789/ui` — the setup
+token is in the container log as long as no API key is stored yet.
 
 ## Ownership
 
-- `app/` — produktive Implementierung (FastAPI, SABnzbd-API, JDownloader-Anbindung)
-- `src/` — Stub/Parallelimplementierung, siehe unten
-- `Dockerfile`, `pyproject.toml`, `README.md` — die README dokumentiert den Configvertrag von `app/`; der `src/`-Stub hat einen eigenen, den kein laufender Prozess liest
+- `app/` — production implementation (FastAPI, SABnzbd API, JDownloader integration)
+- `src/` — stub/parallel implementation, see below
+- `Dockerfile`, `pyproject.toml`, `README.md` — the README documents the config contract of `app/`; the `src/` stub has its own, which no running process reads
 - `.env`, `.env.example`
-- `docs/` — Screenshots der Web-Oberfläche (nur Bilddateien, keine Dokumentation)
+- `docs/` — screenshots of the web UI (image files only, no documentation)
 
-### Der Code wird nach `DDLnzb/bridge` gespiegelt
+### This directory is mirrored into a public repository
 
-`bridge/` ist die Quelle der Wahrheit. Der Inhalt wandert per CI in das **public** Repo
-`DDLnzb/bridge` (Job `sync-bridge-public` in `.github/workflows/ci.yml`, ausgeführt über
-`scripts/sync-bridge-public.sh`). Dort baut die eigene CI des public Repo das Image
-`ghcr.io/ddlnzb/bridge` (linux/amd64 + linux/arm64).
+The content of `bridge/` is mirrored via CI into the public repository
+`DDLnzb/bridge` (job `sync-bridge-public`, executed through
+`scripts/sync-bridge-public.sh`). There, the repository's own CI builds the
+image `ghcr.io/ddlnzb/bridge` (linux/amd64 + linux/arm64).
 
-Konsequenzen für Änderungen hier:
+Consequences for changes here:
 
-- **`.env` darf nicht in den Spiegel.** Die Datei enthält echte Zugangsdaten
-  (`MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY`) und ist im public Repo weder
-  versioniert noch im History enthalten — der Sync filtert sie aus *jedem* Snapshot.
-  Wer hier eine Zugangsdatei braucht, legt sie als `.env.example` an.
-- **`tests/test_deployment_contract.py` läuft nur im Monorepo.** Er prüft den
-  Monorepo-Vertrag (`docker-compose.prod.yml`, `bridge/.env`) und überspringt im
-  public Repo, wo dieser Gegenstand nicht existiert.
-- **Änderungen an `bridge/` erzeugen einen Sync.** Der Sync überträgt **einen
-  Snapshot-Commit** auf Basis des aktuellen `main` des public Repos, eröffnet einen PR
-  und merged ihn per Rebase-Merge. Ein direkter Push auf `main` ist dort durch ein
-  Ruleset verboten — der Sync arbeitet deshalb genauso: Branch, PR, Merge. Wer die
-  Änderung vor dem Merge im public Repo sehen will, muss den Sync-Job abwarten — der
-  Push ins public Repo erfolgt erst danach.
-
-Details zu den verifizierten Eigenschaften stehen in
-[`plan/docs/bridge_public_overlay.md`](../plan/docs/bridge_public_overlay.md).
+- **Everything here is written in English.** The directory is copied verbatim
+  into a publicly readable repository. Comments, docstrings, the web UI labels
+  and the documentation are all in English — a German sentence in a public
+  repository is a bug, not a style question.
+- **`.env` must not end up in the mirror.** The file contains real credentials
+  (`MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY`) and is neither versioned
+  nor contained in the history of the mirrored repository — the sync filters it
+  out of *every* snapshot. Anyone who needs a credentials file here creates it as
+  `.env.example`.
+- **`tests/test_deployment_contract.py` needs subjects that do not exist here.**
+  It checks the compose file of the production stack and the versioned
+  `.env` — neither is part of this repository, so it skips itself here.
+- **Changes here produce a sync.** The sync transfers **one snapshot commit**
+  based on the current `main` of the mirrored repository, opens a PR and merges
+  it via rebase-merge. A direct push to `main` is forbidden there by a ruleset —
+  the sync works the same way: branch, PR, merge.
 
 ## Local Contracts
 
-### `app/` und `src/` sind zwei verschiedene Systeme
+### `app/` and `src/` are two different systems
 
-Das ist der wichtigste Punkt in diesem Verzeichnis.
+This is the most important point in this directory.
 
 | | `app/` | `src/` |
 | --- | --- | --- |
-| Umfang | SABnzbd-API, Queue, JDownloader, Cloud-Link-Fetch | ~108 LOC, `queue`/`history` als `# TODO` |
-| Config | `BridgeConfig` (Dataclass), liest `bridge/.env` | `pydantic_settings.BaseSettings`, `env_file=".env"` |
-| Variablen | `MYJD_EMAIL`, `MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY` | `JD_EMAIL`, `JD_PASSWORD`, `JD_DEVICE`, `DDLNZB_BRIDGE_TOKEN` |
+| Scope | SABnzbd API, queue, JDownloader, cloud link fetch | ~108 LOC, `queue`/`history` as `# TODO` |
+| Config | `BridgeConfig` (dataclass), reads `bridge/.env` | `pydantic_settings.BaseSettings`, `env_file=".env"` |
+| Variables | `MYJD_EMAIL`, `MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY` | `JD_EMAIL`, `JD_PASSWORD`, `JD_DEVICE`, `DDLNZB_BRIDGE_TOKEN` |
 
-Beide Configs sind **disjunkt** — dieselbe Umgebungsvariable wirkt nicht auf beide.
+Both configs are **disjoint** — the same environment variable does not affect
+both.
 
-**`app/` ist der produktive Pfad.** Das `CMD` im Dockerfile zeigt auf `uvicorn app.main:app` und damit auf `app/`. Belege dafür, dass das die gewollte Zielrichtung ist:
+**`app/` is the production path.** The `CMD` in the Dockerfile points to
+`uvicorn app.main:app` and therefore to `app/`. Evidence that this is the
+intended direction:
 
-- `bridge/.env` und `bridge/.env.example` pflegen ausschließlich `app/`-Variablen (`MYJD_*`, `DDLNZB_API_KEY`). Keine einzige `src/`-Variable ist dort gesetzt.
-- `README.md` startet lokal mit `poetry run uvicorn app.main:app`.
-- Alle gemeldeten Bridge-Defekte betreffen `app/`-Dateien.
+- `bridge/.env` and `bridge/.env.example` maintain exclusively `app/` variables
+  (`MYJD_*`, `DDLNZB_API_KEY`). Not a single `src/` variable is set there.
+- `README.md` starts locally with `poetry run uvicorn app.main:app`.
+- Every reported bridge defect affects files in `app/`.
 
-`src/` bleibt erhalten, wird aber nicht gestartet. Ob `src/` ganz entfällt, ist weiterhin offen — das ist eine eigene Entscheidung und nicht Teil der CMD-Korrektur. `Dockerfile` kopiert beide Verzeichnisse (`COPY app ./app`, `COPY src ./src`); das ist Absicht, damit der Stub nicht unbeabsichtigt mitverschwindet.
+`src/` is kept but not started. Whether `src/` disappears entirely is still open
+— that is a separate decision and not part of the CMD correction. The
+`Dockerfile` copies both directories (`COPY app ./app`, `COPY src ./src`); that
+is deliberate, so the stub does not disappear unnoticed.
 
-### Aufrufrichtung ist einseitig
+### The call direction is one-way
 
-Der Bridge fragt die API, niemals umgekehrt. Es gibt kein `BRIDGE_URL`, keinen Callback, keine Webhook-Zustellung an den Bridge. Das Backend kennt den Bridge nicht.
+The bridge asks the API, never the other way round. There is no `BRIDGE_URL`, no
+callback, no webhook delivery to the bridge. The backend does not know the
+bridge.
 
-Konsequenz für das Deployment: der Bridge-Host muss die API erreichen können. Port-Bindings der API auf `127.0.0.1` allein reichen nicht, wenn der Bridge auf einem anderen Host läuft.
+Consequence for the deployment: the bridge host must be able to reach the API.
+Binding the API to `127.0.0.1` alone is not enough when the bridge runs on a
+different host.
 
-### Auth gegen die API
+### Authentication against the API
 
-Der Bridge ruft `GET {DDLNZB_API_URL}/api/v1/links/{release_id}` mit Header `X-API-Key`. Jeder Aufruf zählt gegen das **tägliche Download-Limit** des User-Tiers. Der Bridge darf deshalb nicht aggressiv pollen.
+The bridge calls `GET {DDLNZB_API_URL}/api/v1/links/{release_id}` with the
+header `X-API-Key`. Every call counts against the **daily download limit** of the
+user tier. The bridge must therefore not poll aggressively.
 
-Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert — sie stammt aus einem Base64-Payload und wird ungeprüft interpoliert.
+The `release_id` is encoded into the path segment with `quote(..., safe="")` — it
+comes from a base64 payload and is interpolated without validation.
 
-### Payload-Format
+### Payload format
 
-Das Backend erzeugt in `../backend/app/scrapers/utils/payload.py` einen base64url-kodierten String:
+The backend generates a base64url-encoded string in
+`../backend/app/scrapers/utils/payload.py`:
 
 ```text
 title|source|mirror|size_mb|password|imdb_id
 ```
 
-An Position 2 setzt das Backend `str(release.id)` — also die **Release-UUID**, keine URL.
+At position 2 the backend puts `str(release.id)` — that is the **release UUID**,
+not a URL.
 
-⚠️ Der Bridge dekodiert das **zweimal**, in `app/sabnzbd_api.py` (`decode_payload`) und `app/download_handler.py` (`_parse_payload`). Die Kopien können auseinanderlaufen. Änderungen am Format müssen an beiden Stellen nachgezogen werden.
+⚠️ The bridge decodes it **twice**, in `app/sabnzbd_api.py` (`decode_payload`)
+and in `app/download_handler.py` (`_parse_payload`). The copies can drift apart.
+Changes to the format have to be applied in both places.
 
-### Image-Architekturen
+### Image architectures
 
-Das Image `ddlnzb-bridge` ist **mehrarchitekturfähig**: sein Tag (Versionstag wie `:latest`) zeigt auf eine Manifest-Liste mit `linux/arm64` **und** `linux/amd64`.
+The image is **multi-architecture**: its tag (a version tag like `:latest`)
+points to a manifest list with `linux/arm64` **and** `linux/amd64`.
 
-**Warum:** Die Bridge ist der einzige Baustein des Stacks, der auf dem x86_64-Unraid-Produktionshost laufen soll. Die Images `ddlnzb-api` und `ddlnzb-web` bleiben arm64-only — auf einem x86_64-Host scheitert ihr Pull mit `no matching manifest for linux/amd64`. Issue #677.
+**How:** The build job in `ci.yml` builds both platforms; the arm64 branch
+natively on an ARM64 runner, the amd64 branch emulated via QEMU. After the push
+the job checks the manifest itself — if one of the two platforms is missing, the
+job goes red and no release is created.
 
-**Wie:** Der Job `docker-bridge` in `ci.yml` baut beide Plattformen; der arm64-Zweig nativ auf dem ARM64-Runner, der amd64-Zweig emuliert über QEMU. Nach dem Push prüft der Job das Manifest selbst — fehlt eine der beiden Plattformen, wird der Job rot und es entsteht kein Release.
-
-⚠️ **Die Manifest-Liste darf nicht eingedampft werden.** Ein `docker pull` + `tag` + `push` auf einem ARM64-Host zieht nur die arm64-Variante und verliert die amd64-Variante. Der Alias im `release`-Job benutzt für die Bridge deshalb `docker buildx imagetools create` (für api und web bleibt der alte `pull` + `tag` + `push`-Weg, die sind Einzelplattform-Images).
+⚠️ **The manifest list must not be flattened.** A `docker pull` + `tag` + `push`
+on an ARM64 host pulls only the arm64 variant and loses the amd64 variant. The
+alias in the `release` job therefore uses `docker buildx imagetools create` for
+the bridge (for api and web the old `pull` + `tag` + `push` path stays — those
+are single-platform images).
 
 ### Ports
 
-Der SABnzbd-Port ist **6789** (in `docker-compose.prod.yml` als `6789:6789` veröffentlicht). `BRIDGE_PORT` hat dagegen den Default `8080`, den das Dockerfile per `--port 6789` überschreibt. Die `.env.example` beschreibt `BRIDGE_PORT` — dem Dockerfile-Vorrang geben.
+The SABnzbd port is **6789** (published as `6789:6789` in
+`docker-compose.prod.yml`). `BRIDGE_PORT` on the other hand has the default
+`8080`, which the Dockerfile overrides with `--port 6789`. The `.env.example`
+describes `BRIDGE_PORT` — the Dockerfile takes precedence.
 
-Die Web-Oberfläche hängt am **selben** Port unter dem Präfix `/ui`; die statischen Dateien liegen unter `/ui/static`. Es gibt keinen zweiten Port.
+The web UI hangs on the **same** port under the prefix `/ui`; the static files
+live under `/ui/static`. There is no second port.
 
 ## Work Guidance
 
-- Alle `app/`-Module importieren absolut als `from app.…`. Start daher nur aus `bridge/`-Wurzel oder mit `PYTHONPATH=bridge`. CI nutzt `working-directory: bridge`.
-- `myjdapi` ist ein **synchroner** Client. Die Bridge kapselt ihn mit `asyncio.to_thread`. Jede neue JDownloader-Methode muss in diesem Muster bleiben, sonst blockiert der Event-Loop.
-- `CATEGORY_MAPPING` ist in `BridgeConfig.__post_init__` verdrahtet. Der Kommentar in `.env.example`, der einen JSON-String-Override beschreibt, ist **nicht implementiert** — der Beispielwert täuscht.
-- Zwei Persistenzmechanismen laufen parallel: `sabnzbd_api._persist_state()` schreibt die komplette Queue+History in `STATE_PATH`, `persistence.QueuePersistence` schreibt nur die Queue nach `DATA_DIR/queue.json` (mit atomarem Schreiben via `.tmp` + `replace()`). Beide werden im Lifespan unabhängig genutzt.
-- Der State-Datei führt die Größe in **Bytes** (`size_bytes`, `sizeleft_bytes`), nicht als Text. Ältere Dateien mit `size`/`sizeleft` werden beim Laden über `_bytes_aus_groessen_text()` umgerechnet. Unbekannte Felder in der Datei werden verworfen (`_bekannte_felder()`) — sonst verschluckt `_load_state()` den Fehler und die Queue ist nach dem Neustart **stillschweigend leer**.
+- All `app/` modules import absolutely as `from app.…`. Therefore start only
+  from the `bridge/` root or with `PYTHONPATH=bridge`. CI uses
+  `working-directory: bridge`.
+- `myjdapi` is a **synchronous** client. The bridge wraps it with
+  `asyncio.to_thread`. Every new JDownloader method has to stay within that
+  pattern, otherwise the event loop blocks.
+- `CATEGORY_MAPPING` is wired in `BridgeConfig.__post_init__`. The comment in
+  `.env.example` describing a JSON string override is **not implemented** — the
+  example value misleads.
+- Two persistence mechanisms run in parallel: `sabnzbd_api._persist_state()`
+  writes the complete queue + history into `STATE_PATH`, `persistence.QueuePersistence`
+  writes only the queue to `DATA_DIR/queue.json` (with atomic write via `.tmp` +
+  `replace()`). Both are used independently in the lifespan.
+- The state file keeps the size in **bytes** (`size_bytes`, `sizeleft_bytes`),
+  not as text. Older files with `size`/`sizeleft` are converted on load via
+  `_bytes_aus_groessen_text()`. Unknown fields in the file are discarded
+  (`_bekannte_felder()`) — otherwise `_load_state()` swallows the error and the
+  queue is **silently empty** after a restart.
 
 ## Verification
 
@@ -119,32 +165,73 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` ist ein Platzhalter (`assert True`). Der `bridge`-Job in `ci.yml` führt `poetry run pytest -v` aus — die Tests laufen also: 10 Testdateien mit 74 Testfunktionen und 92 Testfaellen (Stand 23.10.2026). Abgedeckt sind Auth, API-Dispatch, Cloud-Links, Queue-Transitions, State-Restore, die Poll-Intervalle von `_monitor_jdownloader` (mit gestubbtem JDownloader, nicht gegen eine echte Verbindung) und die Web-Oberfläche (`tests/test_webui.py`: Ersteinrichtung mit Setup-Token, Anmeldung und Session, Speichern der Konfiguration, Reset, Schutz der Geheimnisse, dazu die SABnzbd-Kompatibilität (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, Größe in Zahlen, Status-Vokabular)).
+⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The `bridge` job in
+`ci.yml` runs `poetry run pytest -v` — so the tests do run: 10 test files with
+74 test functions and 92 test cases (as of 23.10.2026). Covered are auth, API
+dispatch, cloud links, queue transitions, state restore, the poll intervals of
+`_monitor_jdownloader` (with a stubbed JDownloader, not against a real
+connection) and the web UI (`tests/test_webui.py`: initial setup with setup
+token, login and session, saving the configuration, reset, protection of
+secrets) plus the SABnzbd compatibility (`tests/test_sabnzbd_compat.py`:
+`value`/`name=delete`, size as numbers, status vocabulary).
 
-Nicht getestet ist **`app/heartbeat.py::_heartbeat_loop`** — der Heartbeat-Client. Die zwei Tests mit „heartbeat" im Namen (`test_bridge_auth.py`) prüfen ausschließlich, dass `/heartbeat/reconnect` ohne gültigen Key mit 401 antwortet; die Schleife selbst läuft in keinem Test. Ebenso ungetestet bleibt die Queue-Persistenz. Ein grüner Bridge-Job sagt nichts über diese Pfade aus. Tests zu ergänzen ist laut `../plan/BRIDGE_COMPLETION_PLAN.md` noch offen.
+Not tested is **`app/heartbeat.py::_heartbeat_loop`** — the heartbeat client.
+The two tests with "heartbeat" in their name (`test_bridge_auth.py`) only check
+that `/heartbeat/reconnect` answers with 401 without a valid key; the loop
+itself runs in no test. The queue persistence is untested as well. A green
+bridge job says nothing about these paths.
 
-`tests/conftest.py` liefert `state_file` (State-Datei im `tmp_path`, setzt `DDLNZB_STATE_FILE`) und `fresh_import` (lädt `app.config` und `app.sabnzbd_api` neu, damit `STATE_PATH` neu gelesen wird). Neue Tests, die den Zustand anfassen, nehmen diese Fixtures statt eigene zu bauen.
+`tests/conftest.py` provides `state_file` (state file in `tmp_path`, sets
+`DDLNZB_STATE_FILE`) and `fresh_import` (reloads `app.config` and
+`app.sabnzbd_api` so that `STATE_PATH` is read again). New tests that touch the
+state use these fixtures instead of building their own.
 
-⚠️ **Nicht jeden Test darf `fresh_import()` benutzen.** `download_handler._monitor_jdownloader()` greift über eine Modul-Referenz auf `download_queue` zu. `fresh_import()` erzeugt ein neues Dict, das der Handler nicht sieht — der Eintrag fehlt, die Schleife kehrt sofort zurück und der Test wäre stillschweigend grün. Solche Tests befüllen `app.sabnzbd_api.download_queue` direkt und prüfen anschließend, dass `get_packages` wirklich aufgerufen wurde.
+⚠️ **Not every test may use `fresh_import()`.** `download_handler._monitor_jdownloader()`
+reaches the `download_queue` through a module reference. `fresh_import()` creates
+a new dict that the handler does not see — the entry is missing, the loop
+returns immediately and the test would be silently green. Such tests populate
+`app.sabnzbd_api.download_queue` directly and then verify that `get_packages`
+was really called.
 
-⚠️ **Wer über die HTTP-API testet, darf `app.sabnzbd_api` nicht erst zur Testzeit importieren.** `fresh_import()` entfernt das Modul aus `sys.modules` und importiert es neu — der Router in `app.main` hält aber die **alte** Modulinstanz. Ein `import app.sabnzbd_api` **innerhalb** der Testfunktion liefert danach ein anderes Modul: der Test befüllt eine Queue, die der Router nicht sieht, und die Antworten kommen leer zurück. Der Import gehört deshalb auf **Modulebene** der Testdatei — dann bindet er die Instanz, die auch `app.main` benutzt. Betroffen ist jeder Test, der über `/api` geht (`tests/test_sabnzbd_compat.py`).
+⚠️ **Tests that go through the HTTP API must not import `app.sabnzbd_api` at
+test time.** `fresh_import()` removes the module from `sys.modules` and imports
+it again — but the router in `app.main` holds the **old** module instance. An
+`import app.sabnzbd_api` **inside** the test function then yields a different
+module: the test fills a queue the router does not see and the responses come
+back empty. The import therefore belongs at **module level** of the test file —
+then it binds the instance that `app.main` also uses. This affects every test
+that goes through `/api` (`tests/test_sabnzbd_compat.py`).
 
-Für Tests gilt: sie starten nur aus der `bridge/`-Wurzel, weil die Module absolut als `from app.…` importiert werden. **Dabei `python -m pytest` verwenden, nicht das `pytest`-Skript.** Das Skript legt das aktuelle Verzeichnis nicht auf `sys.path`; legt es eine alte Installation hinein (z. B. eine `.pth`-Datei eines früheren `poetry install` auf ein fremdes Verzeichnis), importiert pytest `app.*` von dort statt aus dem Working Tree. Das trifft Tests stillschweigend falsch — sie laufen gegen einen anderen Stand und schlagen dann für Gründe fehl, die im Working Tree nicht existieren. Gegenprobe bei Verdacht:
+For tests: they only start from the `bridge/` root, because the modules are
+imported absolutely as `from app.…`. **Use `python -m pytest` for this, not the
+`pytest` script.** The script does not put the current directory on `sys.path`;
+if it puts an old installation there (e.g. a `.pth` file from an earlier
+`poetry install` into a foreign directory), pytest imports `app.*` from there
+instead of the working tree. That silently tests the wrong code and then fails
+for reasons that do not exist in the working tree. Counter-check in case of
+doubt:
 
 ```bash
 python -c "import app.sabnzbd_api as m; print(m.__file__)"
 ```
 
-Der Pfad muss im Working Tree liegen.
+The path must point into the working tree.
 
-`pyproject.toml` und `poetry.lock` sind die einzige Abhängigkeitsquelle der Bridge. Ein `requirements.txt` gab es bis 2026-10-19, wurde von keinem Build-Pfad gelesen und wich vom Lockfile ab; es ist entfernt. **Keine zweite Deklaration anlegen** — Dependabot würde beide scannen und doppelte PRs erzeugen, von denen nur einer die installierte Version ändert.
+`pyproject.toml` and `poetry.lock` are the only dependency source of the
+bridge. A `requirements.txt` existed until 2026-10-19, was read by no build
+path and differed from the lockfile; it has been removed. **Do not create a
+second declaration** — Dependabot would scan both and produce duplicate PRs, of
+which only one changes the installed version.
 
-`prometheus-client` (>=0.24.1,<0.27.0) ist seit PR #210 eine Bridge-Abhängigkeit: `app/metrics.py` exportiert `ddlnzb_bridge_*`, und der Monitoring-Stack scrapt den Bridge über `GET /metrics`.
+`prometheus-client` (>=0.24.1,<0.27.0) has been a bridge dependency since PR
+#210: `app/metrics.py` exports `ddlnzb_bridge_*`, and the monitoring stack
+scrapes the bridge via `GET /metrics`.
 
 ## Child DOX Index
 
 | Child | Scope |
 | --- | --- |
-| [`app/AGENTS.md`](app/AGENTS.md) | Produktive Implementierung mit SABnzbd-API und JDownloader |
+| [`app/AGENTS.md`](app/AGENTS.md) | Production implementation with SABnzbd API and JDownloader |
 
-`src/` ist bewusst **ohne** eigenes Doc: Es ist ein Stub mit abweichendem Config-Vertrag und wird vom Image nicht gestartet. Ob er entfernt wird, ist offen.
+`src/` is deliberately **without** its own doc: it is a stub with a deviating
+config contract and is not started by the image. Whether it is removed is open.
