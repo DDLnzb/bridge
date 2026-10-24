@@ -37,7 +37,7 @@ ENV_SOURCES: dict[str, tuple[str, Callable[[str], Any], Any]] = {
     # Der Bridge bringt die API-URL selbst mit - sie ist kein Eingabefeld der
     # Oberflaeche. Per `DDLNZB_API_URL` ueberschreibbar, z. B. mit
     # `http://api:8000` im Docker-Netzwerk oder `http://localhost:8000` lokal.
-    "DDLNZB_API_URL": ("DDLNZB_API_URL", str, "https://api.petsground.de"),
+    "DDLNZB_API_URL": ("DDLNZB_API_URL", str, "https://ddlnzb.pages.dev/api/app"),
     "DDLNZB_API_KEY": ("DDLNZB_API_KEY", str, ""),
     "BRIDGE_HOST": ("BRIDGE_HOST", str, "127.0.0.1"),
     "BRIDGE_PORT": ("BRIDGE_PORT", int, 8080),
