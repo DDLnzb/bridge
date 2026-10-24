@@ -32,7 +32,7 @@ Die Aufrufrichtung ist einseitig: **die Bridge fragt die API, niemals umgekehrt.
 docker run -d \
   --name ddlnzb-bridge \
   -p 6789:6789 \
-  -e DDLNZB_API_URL=https://api.petsground.de \
+  -e DDLNZB_API_URL=https://ddlnzb.pages.dev/api/app \
   -e DDLNZB_API_KEY=your-api-key \
   -e MYJD_EMAIL=your-jdownloader-email \
   -e MYJD_PASSWORD=your-jdownloader-password \
@@ -92,7 +92,7 @@ Der Service bindet standardmäßig auf `0.0.0.0:6789`. Wer ihn nur lokal braucht
 
 | Variable | Beschreibung | Erforderlich |
 |----------|--------------|--------------|
-| `DDLNZB_API_URL` | DDLnzb-API-URL. Default `https://api.petsground.de`; im Compose-Netzwerk `http://api:8000` | Nein |
+| `DDLNZB_API_URL` | DDLnzb-API-URL. Default `https://ddlnzb.pages.dev/api/app`; im Compose-Netzwerk `http://api:8000` | Nein |
 | `DDLNZB_API_KEY` | API-Key aus dem Portal. **Pflicht** — ohne Key lehnt der Bridge jeden Aufruf ab | Ja |
 | `MYJD_EMAIL` | My-JDownloader-E-Mail | Für Downloads |
 | `MYJD_PASSWORD` | My-JDownloader-Passwort | Für Downloads |
@@ -129,12 +129,12 @@ Radarr braucht **zwei** Einträge: einen Indexer für die Suche und einen Downlo
 
 | Feld | Wert |
 | --- | --- |
-| URL | `https://api.petsground.de` — **ohne** `/api` |
+| URL | `https://ddlnzb.pages.dev/api/app` — die App-API der Pages Function |
 | API Key | dein DDLnzb-API-Key |
 | Categories | 2000–2060 (Default passt) |
 | API Path | `/api` (Default, nicht ändern) |
 
-⚠️ Radarr hängt den `/api`-Pfad selbst an die URL. Ein eingetragenes `https://api.petsground.de/api` ergibt `…/api/api` und damit einen 404.
+⚠️ Für Radarr/Sonarr gilt eine **andere** URL als für die Bridge: Die *arrs hängen den `/api`-Pfad selbst an, dort gehört `https://ddlnzb.pages.dev` **ohne** `/api` eingetragen (Radarr ergibt damit `https://ddlnzb.pages.dev/api`). Die Bridge spricht die App-API an und braucht `https://ddlnzb.pages.dev/api/app`.
 
 ### 2. Download-Client (SABnzbd) — für die Übergabe
 
