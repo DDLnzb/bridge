@@ -119,6 +119,7 @@ only needed for unattended setups or to override a value permanently.
 | `EXTRACT_ARCHIVES` | Extract archives (default `true`) | No |
 | `DELETE_ARCHIVES` | Delete archives after extraction (default `true`) | No |
 | `BRIDGE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default `INFO`) | No |
+| `BRIDGE_CORS_ORIGINS` | Comma separated allowlist of browser origins. Empty by default — the bridge needs no CORS. Environment-only, the settings file cannot change it | No |
 | `DDLNZB_DATA_DIR` | Location of the queue and the settings file | No |
 | `DDLNZB_SETTINGS_FILE` | Path of the settings file, default `<DDLNZB_DATA_DIR>/settings.json` | No |
 | `DDLNZB_STATE_FILE` | Path of the state file (queue + history) | No |
@@ -134,6 +135,10 @@ The web UI writes to the settings file (`DDLNZB_DATA_DIR`). What is stored
 there applies immediately — without a restart — and wins over the environment
 variable. To pin a value permanently via the environment, set it there **and**
 do not change it in the UI afterwards.
+
+The settings file is also read **when the process starts**, so a configuration
+entered in the UI survives a restart of the container: the bridge comes up with
+the same API key instead of falling back to the setup token.
 
 `BRIDGE_HOST` / `BRIDGE_PORT` only apply to local runs (default
 `127.0.0.1:8080`). In the container the image starts uvicorn via `CMD` with
