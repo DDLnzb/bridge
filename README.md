@@ -129,7 +129,7 @@ Radarr braucht **zwei** Einträge: einen Indexer für die Suche und einen Downlo
 
 | Feld | Wert |
 | --- | --- |
-| URL | `https://ddlnzb.pages.dev/api/app` — die App-API der Pages Function |
+| URL | `https://ddlnzb.pages.dev` — Radarr hängt den `/api`-Pfad selbst an |
 | API Key | dein DDLnzb-API-Key |
 | Categories | 2000–2060 (Default passt) |
 | API Path | `/api` (Default, nicht ändern) |
