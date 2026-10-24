@@ -117,10 +117,7 @@ def flash_from_code(code: str | None) -> str:
 
 
 def _nav_link(target: str, label: str, icon_name: str) -> str:
-    return (
-        f'<a class="nav-link" href="#{target}">{icon(icon_name)}'
-        f"<span>{escape(label)}</span></a>"
-    )
+    return f'<a class="nav-link" href="#{target}">{icon(icon_name)}<span>{escape(label)}</span></a>'
 
 
 def layout(title: str, content: str, *, with_nav: bool = True) -> str:
@@ -330,12 +327,8 @@ def dashboard_page(view: dict) -> str:
         ]
     )
 
-    api_key_badge = (
-        badge("set", "ok") if view["api_key_set"] else badge("not set", "err")
-    )
-    jd_password_badge = (
-        badge("set", "ok") if view["jd_password_set"] else badge("not set", "warn")
-    )
+    api_key_badge = badge("set", "ok") if view["api_key_set"] else badge("not set", "err")
+    jd_password_badge = badge("set", "ok") if view["jd_password_set"] else badge("not set", "warn")
 
     content = f"""
 <header class="page-head">
@@ -369,7 +362,7 @@ def dashboard_page(view: dict) -> str:
     <div class="card-body">
       <div class="field">
         <label class="label" for="api_url">API URL</label>
-        <input class="input" id="api_url" type="text" value="{escape(view['api_url'])}" disabled>
+        <input class="input" id="api_url" type="text" value="{escape(view["api_url"])}" disabled>
         <span class="hint">The bridge ships the API URL - it comes from the
           deployment configuration (<code>DDLNZB_API_URL</code>) and is deliberately not
           editable here.</span>
@@ -378,7 +371,7 @@ def dashboard_page(view: dict) -> str:
         <label class="label" for="api_key">API key {api_key_badge}</label>
         <div class="secret-wrap">
           <input class="input" id="api_key" name="api_key" type="password" autocomplete="off"
-                 placeholder="{'(unchanged)' if view['api_key_set'] else 'DDLNZB_API_KEY'}">
+                 placeholder="{"(unchanged)" if view["api_key_set"] else "DDLNZB_API_KEY"}">
           <button class="btn btn-outline btn-sm" type="button" data-toggle-secret="api_key">
             {icon("eye")}<span>Show</span>
           </button>
@@ -408,14 +401,14 @@ def dashboard_page(view: dict) -> str:
         <div class="field">
           <label class="label" for="jd_email">Email</label>
           <input class="input" id="jd_email" name="jd_email" type="email" autocomplete="off"
-                 value="{escape(view['jd_email'])}">
+                 value="{escape(view["jd_email"])}">
         </div>
         <div class="field">
           <label class="label" for="jd_password">Password {jd_password_badge}</label>
           <div class="secret-wrap">
             <input class="input" id="jd_password" name="jd_password" type="password"
                    autocomplete="off"
-                   placeholder="{'(unchanged)' if view['jd_password_set'] else 'Password'}">
+                   placeholder="{"(unchanged)" if view["jd_password_set"] else "Password"}">
             <button class="btn btn-outline btn-sm" type="button" data-toggle-secret="jd_password">
               {icon("eye")}<span>Show</span>
             </button>
@@ -426,13 +419,13 @@ def dashboard_page(view: dict) -> str:
         <div class="field">
           <label class="label" for="jd_device">Device name</label>
           <input class="input" id="jd_device" name="jd_device" type="text"
-                 value="{escape(view['jd_device'])}" placeholder="Name in my.jdownloader.org">
+                 value="{escape(view["jd_device"])}" placeholder="Name in my.jdownloader.org">
           <span class="hint">The name must match the device name in the account exactly.</span>
         </div>
         <div class="field">
           <label class="label" for="jd_app_key">App key</label>
           <input class="input" id="jd_app_key" name="jd_app_key" type="text"
-                 value="{escape(view['jd_app_key'])}" placeholder="DDLnzb">
+                 value="{escape(view["jd_app_key"])}" placeholder="DDLnzb">
         </div>
       </div>
       <div class="result" data-result="jdownloader">
@@ -453,20 +446,20 @@ def dashboard_page(view: dict) -> str:
       <div class="field">
         <label class="label" for="download_dir">Download target folder</label>
         <input class="input" id="download_dir" name="download_dir" type="text"
-               value="{escape(view['download_dir'])}" placeholder="/downloads">
+               value="{escape(view["download_dir"])}" placeholder="/downloads">
         <span class="hint">The folder must be writable for the bridge and reachable
           identically for JDownloader.</span>
       </div>
       <div class="grid-2">
         <label class="switch" for="extract_archives">
           <input type="checkbox" id="extract_archives" name="extract_archives"
-                 {'checked' if view['extract_archives'] else ''}>
+                 {"checked" if view["extract_archives"] else ""}>
           <span class="switch-text">Extract archives
             <small>Hand the extracted contents to JDownloader</small></span>
         </label>
         <label class="switch" for="delete_archives">
           <input type="checkbox" id="delete_archives" name="delete_archives"
-                 {'checked' if view['delete_archives'] else ''}>
+                 {"checked" if view["delete_archives"] else ""}>
           <span class="switch-text">Delete archives afterwards
             <small>Free up space once extracted</small></span>
         </label>
@@ -494,13 +487,13 @@ def dashboard_page(view: dict) -> str:
         <dt>Bridge port</dt>
         <dd>6789 (fixed in the Docker image)</dd>
         <dt>Running since</dt>
-        <dd>{escape(view['started_at'])}</dd>
+        <dd>{escape(view["started_at"])}</dd>
         <dt>Settings file</dt>
-        <dd><code>{escape(view['settings_path'])}</code></dd>
+        <dd><code>{escape(view["settings_path"])}</code></dd>
         <dt>Configuration source</dt>
-        <dd>{escape(view['config_source'])}</dd>
+        <dd>{escape(view["config_source"])}</dd>
         <dt>Category mapping</dt>
-        <dd>{escape(view['category_summary'])}</dd>
+        <dd>{escape(view["category_summary"])}</dd>
       </dl>
     </div>
   </section>

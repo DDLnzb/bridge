@@ -42,8 +42,7 @@ ENV_FILE = BRIDGE_DIR / ".env"
 #: green incorrectly.
 if not (COMPOSE_FILE.is_file() and ENV_FILE.is_file()):
     pytest.skip(
-        "Deployment contract (compose file, versioned .env) - "
-        "not present in this repository",
+        "Deployment contract (compose file, versioned .env) - not present in this repository",
         allow_module_level=True,
     )
 

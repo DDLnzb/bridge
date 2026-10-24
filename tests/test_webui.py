@@ -206,7 +206,9 @@ def test_leeres_secret_feld_behaelt_den_gespeicherten_wert(client, settings_file
     _login(client)
     client.post("/ui/settings", data={"api_key": "new-key"}, follow_redirects=False)
 
-    antwort = client.post("/ui/settings", data={"api_key": "", "download_dir": "/dl"}, follow_redirects=False)
+    antwort = client.post(
+        "/ui/settings", data={"api_key": "", "download_dir": "/dl"}, follow_redirects=False
+    )
 
     assert antwort.status_code == 303
     assert config.DDLNZB_API_KEY == "new-key"

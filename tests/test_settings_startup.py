@@ -59,9 +59,7 @@ def test_settings_file_is_applied_at_startup(settings_file):
         assert config.DDLNZB_API_KEY == "FROM-SETTINGS-FILE"
 
 
-def test_no_setup_token_when_the_key_comes_from_the_settings_file(
-    settings_file, monkeypatch
-):
+def test_no_setup_token_when_the_key_comes_from_the_settings_file(settings_file, monkeypatch):
     """A configured bridge does not print a setup token.
 
     The token is the documented way into the initial setup - it must not
