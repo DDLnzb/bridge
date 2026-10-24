@@ -27,15 +27,19 @@ Konsequenzen für Änderungen hier:
 
 - **`.env` darf nicht in den Spiegel.** Die Datei enthält echte Zugangsdaten
   (`MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY`) und ist im public Repo weder
-  versioniert noch im History enthalten — der Sync filtert sie aus *jeder* Commit.
+  versioniert noch im History enthalten — der Sync filtert sie aus *jedem* Snapshot.
   Wer hier eine Zugangsdatei braucht, legt sie als `.env.example` an.
 - **`tests/test_deployment_contract.py` läuft nur im Monorepo.** Er prüft den
   Monorepo-Vertrag (`docker-compose.prod.yml`, `bridge/.env`) und überspringt im
   public Repo, wo dieser Gegenstand nicht existiert.
-- **Änderungen an `bridge/` erzeugen einen Sync.** Wer sie vor dem Merge im public Repo
-  sehen will, muss den Sync-Job abwarten — der Push ins public Repo erfolgt erst danach.
+- **Änderungen an `bridge/` erzeugen einen Sync.** Der Sync überträgt **einen
+  Snapshot-Commit** auf Basis des aktuellen `main` des public Repos, eröffnet einen PR
+  und merged ihn per Rebase-Merge. Ein direkter Push auf `main` ist dort durch ein
+  Ruleset verboten — der Sync arbeitet deshalb genauso: Branch, PR, Merge. Wer die
+  Änderung vor dem Merge im public Repo sehen will, muss den Sync-Job abwarten — der
+  Push ins public Repo erfolgt erst danach.
 
-Details und die verifizierten Eigenschaften (Determinismus, Fast-Forward-Kette) stehen in
+Details zu den verifizierten Eigenschaften stehen in
 [`plan/docs/bridge_public_overlay.md`](../plan/docs/bridge_public_overlay.md).
 
 ## Local Contracts
