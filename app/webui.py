@@ -78,8 +78,7 @@ def setup_token() -> str:
     if _SETUP_TOKEN is None:
         _SETUP_TOKEN = os.getenv("DDLNZB_SETUP_TOKEN") or secrets.token_urlsafe(12)
         logger.warning(
-            "Bridge is not configured - setup token: %s "
-            "(setup via http://<host>:6789/ui)",
+            "Bridge is not configured - setup token: %s (setup via http://<host>:6789/ui)",
             _SETUP_TOKEN,
         )
     return _SETUP_TOKEN
@@ -340,11 +339,7 @@ async def test_connections():
 async def reconnect():
     """Reconnect JDownloader with the current credentials."""
     ok = await jdownloader.reconfigure()
-    detail = (
-        "connected"
-        if ok
-        else "no connection - check the credentials or the device name"
-    )
+    detail = "connected" if ok else "no connection - check the credentials or the device name"
     record_test("jdownloader", ok, detail)
     return {"ok": ok, "detail": detail}
 
@@ -399,7 +394,6 @@ async def _form_values(request: Request) -> dict[str, str]:
 
     parsed = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
     return {key: values[-1] for key, values in parsed.items()}
-
 
 
 async def _check_api() -> bool:
