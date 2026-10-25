@@ -27,10 +27,26 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies.
+#
+# Die Debian-Repositories werden vor `apt-get update` auf HTTPS umgeschrieben.
+# Grund: der ops-Runner erreicht ausgehenden Verkehr auf Port 80 nicht (TCP-Timeout
+# gegen deb.debian.org), auf Port 443 dagegen schon. Ohne den Umbau bricht der
+# Image-Build an `apt-get update` ab - und mit ihm die ganze Kette
+# auto-tag -> docker-backend -> release -> deploy-dev. `ca-certificates` ist im
+# Basisimage bereits vorhanden, `apt` beherrscht HTTPS nativ.
+# Siehe Issue #850.
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        if [ -f "$f" ]; then \
+            sed -i 's|http://deb.debian.org|https://deb.debian.org|g' "$f"; \
+        fi; \
+    done; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        curl \
+    ; \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
