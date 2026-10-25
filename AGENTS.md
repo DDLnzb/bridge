@@ -130,19 +130,26 @@ Changes to the format have to be applied in both places.
 
 ### Image architectures
 
-The image is **multi-architecture**: its tag (a version tag like `:latest`)
-points to a manifest list with `linux/arm64` **and** `linux/amd64`.
+The image is **multi-architecture**: its tag (`:latest` or a commit tag like
+`:<sha12>`) points to a manifest list with `linux/arm64` **and** `linux/amd64`.
 
-**How:** The build job in `ci.yml` builds both platforms; the arm64 branch
-natively on an ARM64 runner, the amd64 branch emulated via QEMU. After the push
-the job checks the manifest itself — if one of the two platforms is missing, the
-job goes red and no release is created.
+**Where it is built:** in the **public repository `DDLnzb/bridge`**, not in this
+monorepo. The CI of that repo builds both platforms on GitHub-hosted runners —
+the arm64 branch natively on `ubuntu-24.04-arm`, the amd64 branch natively on
+`ubuntu-latest`. After the push it checks the manifest itself — if one of the
+two platforms is missing, the job goes red.
+
+The monorepo keeps the **code** as the source of truth and mirrors it into that
+repo (`sync-bridge-public`); the job `docker-bridge` in this repo's `ci.yml` was
+removed on 25.10.2026 because it built the same image a second time. The image
+name is `ghcr.io/ddlnzb/bridge` (not `ghcr.io/weedo078/ddlnzb-bridge`).
+`docker-compose.prod.yml` pulls it with `BRIDGE_IMAGE_TAG` (default `:latest`),
+because the Monorepo version tag (`v1.1.x`) does not exist in that repo.
 
 ⚠️ **The manifest list must not be flattened.** A `docker pull` + `tag` + `push`
 on an ARM64 host pulls only the arm64 variant and loses the amd64 variant. The
-alias in the `release` job therefore uses `docker buildx imagetools create` for
-the bridge (for api and web the old `pull` + `tag` + `push` path stays — those
-are single-platform images).
+alias in the `release` job of this repo therefore touches only `ddlnzb-web`
+(single-platform); the bridge is not aliased here at all.
 
 ### Ports
 
