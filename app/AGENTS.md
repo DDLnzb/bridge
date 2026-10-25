@@ -206,6 +206,8 @@ The bridge needs **no** CORS at all: the *arr apps are not browsers, and the web
 
 ### Time limits are hardcoded
 
+Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert. Sie stammt aus einem Base64-Payload, wird aber **vor** der Interpolation als UUID geprüft (`_is_uuid()`) — ein Payload, das keine UUID liefert, wird verworfen. Der frühere `by-source`-Zweig (mit `source_url`/`hoster`-Param) ist entfernt — im Backend existiert dieser Pfad nicht, siehe `../AGENTS.md`.
+
 - Cloud calls: timeout 30s, 3 attempts, exponential backoff
 - JDownloader monitoring: 5s polling active / 300s idle, `max_duration = 30*60` (30 minutes)
 - Heartbeat: `HEARTBEAT_INTERVAL = 60`, `MAX_RECONNECT_ATTEMPTS = 3`, backoff `[5, 15, 30]`. Pings only when there are active downloads in the queue
@@ -214,9 +216,40 @@ The bridge needs **no** CORS at all: the *arr apps are not browsers, and the web
 
 `_fetch_links_from_cloud()` catches `httpx.RequestError` so that the retry is not broken. Unexpected errors abort the retry. Keep both in mind when changing it — catching too broadly hides errors, catching too narrowly wastes repetitions.
 
-The `release_id` is encoded into the path segment with `quote(..., safe="")`. It comes from a base64 payload and is interpolated into `GET /api/v1/links/{release_id}` without validation. The former `by-source` branch (with the `source_url`/`hoster` parameter) has been removed — this path does not exist in the backend, see `../AGENTS.md`.
+The `release_id` is encoded into the path segment with `quote(..., safe="")`. It comes from a base64 payload and is checked as a UUID **before** it is interpolated into `GET /api/v1/links/{release_id}`. The former `by-source` branch (with the `source_url`/`hoster` parameter) has been removed — this path does not exist in the backend, see `../AGENTS.md`.
 
 ### The sleep follows the package state, not the poll success
+
+### Ein Decoder, zwei Aufrufer (#729)
+
+`decode_payload()` in `sabnzbd_api.py` ist der **einzige** Decoder des
+Payload-Formats. `download_handler.py` importiert ihn (`from app.sabnzbd_api
+import decode_payload`) und ruft ihn auf — es gibt keine zweite Kopie.
+
+Bis zum 24.10.2026 existierte die Decode-Logik doppelt (`decode_payload` und
+`_parse_payload`); die Kopien konnten auseinanderlaufen, ohne dass ein Test
+das gemerkt hätte. Wer das Format ändert, ändert **eine** Stelle.
+
+Zwei Formate werden gelesen:
+
+| Format | Bedingung |
+| --- | --- |
+| JSON (`{"v":2,…}`) | der aktuelle Stand; `v` muss `PAYLOAD_VERSION` sein |
+| Legacy (`title\|source\|…`) | nur bei **exakt** `LEGACY_FIELD_COUNT` Feldern **und** UUID in Feld 1 |
+
+Ein Payload, das weder das eine noch das andere ist, liefert `None` — der
+Download bricht ab, statt ein falsches Release zu laden. **Nichts wird
+geraten.**
+
+Die Release-ID wird in **beiden** Formaten als UUID geprüft (`_is_uuid()`): das
+Backend kennt keine anderen IDs, und die ID wandert in den Pfad von
+`GET /api/v1/links/{release_id}`.
+
+⚠️ **Der Titel bestimmt nichts mehr.** Im Legacy-Format konnte ein `|` im
+Release-Titel die Felder verschieben — und damit bestimmen, welches Release
+geladen und mit welchem Passwort entpackt wird. Genau das ist der Befund #729.
+
+### Division im Fortschritt
 
 `_monitor_jdownloader()` chooses between `active_interval` (5s) and `idle_interval` (300s) via the flag `matched`. That is a **state of the monitoring**, not the result of the single poll call, and therefore lives outside the `while` loop.
 
