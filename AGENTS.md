@@ -151,6 +151,30 @@ on an ARM64 host pulls only the arm64 variant and loses the amd64 variant. The
 alias in the `release` job of this repo therefore touches only `ddlnzb-web`
 (single-platform); the bridge is not aliased here at all.
 
+### The image build needs no HTTP
+
+The `Dockerfile` rewrites the Debian repositories to **HTTPS** before
+`apt-get update` runs (`sed -i 's|http://deb.debian.org|https://deb.debian.org|g'`
+on `/etc/apt/sources.list` and `/etc/apt/sources.list.d/debian.sources`).
+
+Reason (#850): the ops runner (`ddlnzb-ec2-ops`) cannot reach outbound traffic
+on **port 80** — the TCP connect to `deb.debian.org:80` times out, while port
+443 works. Without the rewrite the build fails at `apt-get update` with exit
+code 100, and with it the whole chain `auto-tag` → `docker-backend` → `release`
+→ `deploy-dev`: a tag is created, but no release and no deploy to `ddlnzb-dev`
+happen.
+
+⚠️ **A green `docker-backend` on `main` proves nothing here.** As long as the
+cached layer of the `apt` step is hit, the step never runs at all — the failure
+only becomes visible when that layer has to be rebuilt. Check a changed package
+list once **without cache** (`docker build --no-cache`), otherwise nothing was
+verified.
+
+`ca-certificates` is already part of the `python:3.11-slim` base image and `apt`
+speaks HTTPS natively — no extra certificate package is needed. The contract is
+written down in `backend/tests/test_dockerfile_apt_sources.py` and covers the
+backend Dockerfile the same way.
+
 ### Ports
 
 The SABnzbd port is **6789** (published as `6789:6789` in
