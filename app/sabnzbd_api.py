@@ -25,6 +25,16 @@ STATE_PATH = Path(config.STATE_FILE).expanduser()
 
 router = APIRouter()
 
+#: Version des DDLnzb-Payload-Formats. Steht als Feld "v" im JSON-Objekt.
+#: Das Backend und die Bridge muessen dieselbe Version sprechen - siehe
+#: `backend/app/scrapers/utils/payload.py`.
+PAYLOAD_VERSION = 2
+
+#: Feldzahl des alten `|`-Formats. Nur ein exakt passendes Legacy-Payload
+#: wird akzeptiert - mehr Felder bedeuten, dass ein `|` im Titel die Felder
+#: verschoben hat (#729).
+LEGACY_FIELD_COUNT = 6
+
 # In-memory queue and history
 download_queue: dict[str, "QueueItem"] = {}
 download_history: dict[str, "HistoryItem"] = {}
@@ -276,7 +286,7 @@ class PayloadInfo:
     """Decoded payload information."""
 
     title: str
-    source_url: str
+    release_id: str
     mirror: str | None
     size_bytes: int
     password: str | None
@@ -761,7 +771,7 @@ def _enqueue_payload(payload: str, nzbname: str | None, category: str | None) ->
         status=SAB_STATUS_QUEUED,
         size_bytes=size_bytes,
         sizeleft_bytes=size_bytes,
-        release_id=info.source_url if info else None,
+        release_id=info.release_id if info else None,
         payload=payload,
     )
     download_queue[nzo_id] = item
@@ -783,44 +793,128 @@ def _extract_payload_from_url(url: str) -> str | None:
 
 
 def _extract_payload_from_nzb(data: bytes) -> str | None:
-    """Extract the payload marker from a fake NZB file."""
+    """Extract the payload marker from a fake NZB file.
+
+    Reihenfolge der Quellen:
+
+    1. `<meta type="ddlnzb_payload">…</meta>` - das ist die Stelle, an der das
+       Backend den Payload ablegt.
+    2. `<payload>…</payload>` - der Rueckfall.
+
+    ⚠️ **Nicht auf das erste `payload` im Dokument vertrauen.** Das NZB wird
+    zwar mit ElementTree gebaut (der Titel ist escaped), aber die Bridge
+    bekommt die Datei von aussen - ein fremdes NZB koennte an beliebiger Stelle
+    ein `<payload>`-Element einschleusen. Deshalb wird zuerst das Meta
+    gesucht, und der Titel eines fremden NZB darf kein Payload sein (#729).
+    """
     try:
         text = data.decode("utf-8", errors="ignore")
     except Exception:
         return None
-    match = re.search(r'payload="([A-Za-z0-9_\-=]+)"', text)
+    match = re.search(
+        r'<meta\s+type="ddlnzb_payload"[^>]*>([A-Za-z0-9_\-=]+)</meta>',
+        text,
+    )
     if match:
         return match.group(1)
-    match = re.search(r"<payload>(.*?)</payload>", text, re.DOTALL)
+    match = re.search(r"<payload>([A-Za-z0-9_\-=]+)</payload>", text)
     if match:
         return match.group(1).strip()
     return None
 
 
 def decode_payload(payload_str: str) -> PayloadInfo | None:
-    """Decode Base64 Payload -> PayloadInfo."""
+    """Decode Base64 Payload -> PayloadInfo.
+
+    Zwei Formate werden gelesen:
+
+    * **JSON (Version 2)** - der aktuelle Stand. Die Felder stehen als
+      Objekt, es gibt keinen Delimiter, ein `|` im Titel ist damit
+      unkritisch.
+    * **Das alte `|`-Format** - nur, wenn es eindeutig ist: exakt sechs
+      Felder und eine UUID in Feld 1. Ein Titel mit `|` erzeugt mehr
+      Felder; solch ein Payload wird verworfen, statt die Felder zu
+      verschieben. Vorher konnte ein Release-Titel damit bestimmen, **welches**
+      Release die Bridge aufloest (#729).
+
+    Die Release-ID wird in beiden Faellen als UUID geprueft - das Backend
+    kennt keine anderen IDs, und der API-Aufruf traegt die ID im Pfad.
+    """
     if not payload_str:
         return None
     try:
         decoded = base64.urlsafe_b64decode(payload_str).decode("utf-8")
-        parts = decoded.split("|")
-        if len(parts) >= 6:
-            size_raw = parts[3]
-            if size_raw:
-                if "." in size_raw:
-                    size = int(float(size_raw) * 1024 * 1024)
-                else:
-                    size = int(size_raw)
-            else:
-                size = 0
-            return PayloadInfo(
-                title=parts[0],
-                source_url=parts[1],
-                mirror=parts[2] or None,
-                size_bytes=size,
-                password=parts[4] or None,
-                imdb_id=parts[5] or None,
-            )
     except Exception:
         return None
-    return None
+
+    info = _decode_json_payload(decoded)
+    if info is not None:
+        return info
+
+    return _decode_legacy_payload(decoded)
+
+
+def _decode_json_payload(decoded: str) -> PayloadInfo | None:
+    """Das JSON-Format (Version 2) lesen."""
+    try:
+        raw = json.loads(decoded)
+    except (ValueError, TypeError):
+        return None
+
+    if not isinstance(raw, dict) or raw.get("v") != PAYLOAD_VERSION:
+        return None
+
+    release_id = str(raw.get("release_id") or "")
+    if not _is_uuid(release_id):
+        return None
+
+    try:
+        size_mb = float(raw.get("size_mb") or 0)
+    except (TypeError, ValueError):
+        return None
+
+    return PayloadInfo(
+        title=str(raw.get("title") or ""),
+        release_id=release_id,
+        mirror=str(raw["mirror"]) if raw.get("mirror") else None,
+        size_bytes=int(size_mb * 1024 * 1024),
+        password=str(raw["password"]) if raw.get("password") else None,
+        imdb_id=str(raw["imdb_id"]) if raw.get("imdb_id") else None,
+    )
+
+
+def _decode_legacy_payload(decoded: str) -> PayloadInfo | None:
+    """Das alte `|`-Format lesen - nur, wenn es eindeutig ist."""
+    parts = decoded.split("|")
+    if len(parts) != LEGACY_FIELD_COUNT:
+        return None
+
+    release_id = parts[1]
+    if not _is_uuid(release_id):
+        return None
+
+    size_raw = parts[3]
+    try:
+        size = int(float(size_raw) * 1024 * 1024) if size_raw else 0
+    except ValueError:
+        return None
+
+    return PayloadInfo(
+        title=parts[0],
+        release_id=release_id,
+        mirror=parts[2] or None,
+        size_bytes=size,
+        password=parts[4] or None,
+        imdb_id=parts[5] or None,
+    )
+
+
+def _is_uuid(value: str) -> bool:
+    """Ist der Wert eine UUID? Die Bridge loest nur Release-UUIDs auf."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True

@@ -93,7 +93,8 @@ header `X-API-Key`. Every call counts against the **daily download limit** of th
 user tier. The bridge must therefore not poll aggressively.
 
 The `release_id` is encoded into the path segment with `quote(..., safe="")` — it
-comes from a base64 payload and is interpolated without validation.
+comes from a base64 payload and is checked as a UUID **before** it is
+interpolated. A payload that yields no UUID is discarded.
 
 ### The settings file counts at startup
 
@@ -115,18 +116,36 @@ widen the list of browser origins that may talk to the bridge.
 ### Payload format
 
 The backend generates a base64url-encoded string in
-`../backend/app/scrapers/utils/payload.py`:
+`../backend/app/scrapers/utils/payload.py`. The format is **JSON**:
 
 ```text
 title|source|mirror|size_mb|password|imdb_id
 ```
 
-At position 2 the backend puts `str(release.id)` — that is the **release UUID**,
-not a URL.
+`release_id` is the **release UUID** — not a URL. The bridge resolves exactly
+this release (`GET /api/v1/links/{release_id}`).
 
-⚠️ The bridge decodes it **twice**, in `app/sabnzbd_api.py` (`decode_payload`)
-and in `app/download_handler.py` (`_parse_payload`). The copies can drift apart.
-Changes to the format have to be applied in both places.
+⚠️ **Until 24.10.2026 it was a `|` format** (`title|source|mirror|size_mb|
+password|imdb_id`). A `|` in the release title — which occurs regularly —
+shifted every following field by one position. The title thus decided which
+release the bridge resolves and with which password it unpacks it (Issue #729).
+The JSON format has no delimiter.
+
+**The legacy format is only read, and only when it is unambiguous:** exactly
+six fields **and** a UUID in field 1. A title with `|` produces seven or more
+fields and is rejected — exactly that ambiguity was the finding. A payload
+that is neither JSON nor a valid legacy payload is **not** guessed: the
+download aborts with an error instead of loading a wrong release.
+
+⚠️ **There is exactly one decoder.** `app/sabnzbd_api.py` (`decode_payload`)
+and `app/download_handler.py` call the **same** function. Until 24.10.2026 the
+decode logic existed twice; the copies could drift apart. Whoever changes the
+format changes **one** place.
+
+The payload is in the NZB document twice: in the `<meta type="ddlnzb_payload">`
+and in the `<payload>` element. The bridge reads the meta first and falls back
+to the element — **not** to an arbitrary `<payload>` anywhere: the file comes
+from outside, a foreign NZB could smuggle in such an element.
 
 ### Image architectures
 
@@ -218,10 +237,12 @@ poetry run python -m pytest tests/ -v
 105 test cases (as of 24.10.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
-connection) and the web UI (`tests/test_webui.py`: initial setup with setup
-token, login and session, saving the configuration, reset, protection of
-secrets) plus the SABnzbd compatibility (`tests/test_sabnzbd_compat.py`:
-`value`/`name=delete`, size as numbers, status vocabulary).
+connection), the payload format (`tests/test_payload.py`: JSON v2, legacy
+format, UUID check of the release ID — see „Payload format") and the web UI
+(`tests/test_webui.py`: initial setup with setup token, login and session,
+saving the configuration, reset, protection of secrets) plus the SABnzbd
+compatibility (`tests/test_sabnzbd_compat.py`: `value`/`name=delete`, size as
+numbers, status vocabulary).
 
 Two files came with the security review of 24.10.2026: `test_settings_startup.py`
 (the settings file is applied when the process starts — the key is effective

@@ -5,7 +5,6 @@ Handles the download flow: fetch links from cloud, send to JDownloader.
 """
 
 import asyncio
-import base64
 import logging
 from urllib.parse import quote
 
@@ -16,6 +15,7 @@ from app.jdownloader import jdownloader
 from app.sabnzbd_api import (
     SAB_STATUS_QUEUED,
     complete_download,
+    decode_payload,
     download_queue,
     fail_download,
     set_item_size,
@@ -76,26 +76,27 @@ class DownloadHandler:
 
             # Parse payload to get release info
             payload_source = item.payload or item.filename
-            release_info = self._parse_payload(payload_source)
-            if not release_info:
+            info = decode_payload(payload_source)
+            if not info:
                 fail_download(nzo_id, "Invalid payload")
                 logger.warning("Invalid payload for %s", nzo_id)
                 return
 
-            # Field 1 of the payload is called `source` in the backend, but it
-            # holds str(release.id) - the release UUID, not a portal URL. The
-            # former local was named `source_url` and drove the confusion in
-            # #374; the unambiguous name belongs here.
-            title, release_id, mirror, size, password, imdb_id = release_info
-            if size and size > 0:
-                set_item_size(item, size)
+            # Das Payload traegt die Release-UUID - nicht die Portal-URL.
+            # Der Decoder ist der einzige Ort, der das Format kennt; er
+            # prueft die ID auch als UUID, bevor sie in einen Pfad wandert.
+            title = info.title
+            release_id = info.release_id
+            password = info.password
+            if info.size_bytes and info.size_bytes > 0:
+                set_item_size(item, info.size_bytes)
             item.release_id = release_id
             logger.debug(
                 "Parsed payload for %s: title=%s mirror=%s size=%s",
                 nzo_id,
                 title,
-                mirror,
-                size,
+                info.mirror,
+                info.size_bytes,
             )
 
             update_progress(nzo_id, 10, "Getting download links...")
@@ -140,34 +141,6 @@ class DownloadHandler:
         except Exception as e:
             logger.exception("Processing error for %s: %s", nzo_id, e)
             fail_download(nzo_id, str(e))
-
-    def _parse_payload(self, payload_str: str) -> tuple | None:
-        """Parse DDLnzb payload."""
-        try:
-            # Payload format: title|source|mirror|size|password|imdb_id
-            decoded = base64.urlsafe_b64decode(payload_str).decode("utf-8")
-            parts = decoded.split("|")
-
-            if len(parts) >= 6:
-                size_raw = parts[3]
-                if size_raw:
-                    if "." in size_raw:
-                        size = int(float(size_raw) * 1024 * 1024)
-                    else:
-                        size = int(size_raw)
-                else:
-                    size = 0
-                return (
-                    parts[0],  # title
-                    parts[1],  # source_url
-                    parts[2] or None,  # mirror
-                    size,  # size bytes
-                    parts[4] or None,  # password
-                    parts[5] or None,  # imdb_id
-                )
-            return None
-        except Exception:
-            return None
 
     async def _fetch_links_from_cloud(
         self,
