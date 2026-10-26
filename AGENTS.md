@@ -180,7 +180,7 @@ Reason (#850): the ops runner (`ddlnzb-ec2-ops`) cannot reach outbound traffic
 on **port 80** — the TCP connect to `deb.debian.org:80` times out, while port
 443 works. Without the rewrite the build fails at `apt-get update` with exit
 code 100, and with it the whole chain `auto-tag` → `docker-backend` → `release`
-→ `deploy-dev`: a tag is created, but no release and no deploy to `ddlnzb-dev`
+→ `deploy-coolify`: a tag is created, but no release and no deploy to `ddlnzb-dev`
 happen.
 
 ⚠️ **A green `docker-backend` on `main` proves nothing here.** As long as the
