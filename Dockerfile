@@ -56,8 +56,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app ./app
 COPY src ./src
 
-# Create non-root user
-RUN useradd -m -u 1000 ddlnzb && chown -R ddlnzb:ddlnzb /app
+# Create non-root user and a writable data directory. Docker copies the owner
+# and mode of this directory when it initializes a new named volume at /app/data.
+RUN useradd -m -u 1000 ddlnzb \
+    && mkdir -p /app/data \
+    && chown -R ddlnzb:ddlnzb /app
 USER ddlnzb
 
 # Expose port (SABnzbd-compatible API)

@@ -102,6 +102,10 @@ The bridge has three configuration layers: `settings file > environment > defaul
 The file is written by the web UI (`DDLNZB_DATA_DIR/settings.json`, mounted to
 `/app/data` in the image).
 
+The image runs as UID 1000 and creates `/app/data` owned by that user so a new
+Docker named volume is writable. Bind-mounted host directories must also be
+writable by UID 1000; existing volumes retain their prior ownership.
+
 Until 24.10.2026 the file was only read by the **write** routes of that UI: after
 a restart the bridge started with the environment alone — the key was empty, a
 setup token went into the log and every *arr call was answered with 401, although

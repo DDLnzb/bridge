@@ -48,6 +48,18 @@ That is all that is required to start the container. **Everything else is
 configured in the web UI** at `http://<host>:6789/ui` — API key, JDownloader
 access, download target folder and log level.
 
+The bridge runs as UID `1000`. For a bind-mounted data directory, create it
+with matching ownership before starting the container:
+
+```bash
+mkdir -p /path/to/data
+sudo chown 1000:1000 /path/to/data
+```
+
+Docker-created named volumes at `/app/data` are initialized with the image's
+directory ownership. Existing volumes keep their current ownership; if setup
+reports a permission error, change the volume directory owner to `1000:1000`.
+
 ### First-time setup
 
 As long as no API key is stored, `/ui` shows the setup form. It asks for the
