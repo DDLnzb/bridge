@@ -48,17 +48,13 @@ That is all that is required to start the container. **Everything else is
 configured in the web UI** at `http://<host>:6789/ui` — API key, JDownloader
 access, download target folder and log level.
 
-The bridge runs as UID `1000`. For a bind-mounted data directory, create it
-with matching ownership before starting the container:
-
-```bash
-mkdir -p /path/to/data
-sudo chown 1000:1000 /path/to/data
-```
+The bridge runs as UID:GID `99:100` (`nobody:users`), which matches Unraid's
+default ownership for `/mnt/user/appdata`. On Unraid, the standard bind mount
+can be used without changing host permissions. On other hosts, make sure the
+bind-mounted data directory is writable by UID `99` and GID `100`.
 
 Docker-created named volumes at `/app/data` are initialized with the image's
-directory ownership. Existing volumes keep their current ownership; if setup
-reports a permission error, change the volume directory owner to `1000:1000`.
+directory ownership. Existing bind mounts keep their host ownership.
 
 ### First-time setup
 

@@ -102,9 +102,10 @@ The bridge has three configuration layers: `settings file > environment > defaul
 The file is written by the web UI (`DDLNZB_DATA_DIR/settings.json`, mounted to
 `/app/data` in the image).
 
-The image runs as UID 1000 and creates `/app/data` owned by that user so a new
-Docker named volume is writable. Bind-mounted host directories must also be
-writable by UID 1000; existing volumes retain their prior ownership.
+The image runs as UID:GID `99:100` (`nobody:users`) to match Unraid's default
+appdata ownership, and creates `/app/data` owned by that identity so a new
+Docker named volume is writable. Bind-mounted host directories must be
+writable by UID 99 and GID 100; existing mounts retain their prior ownership.
 
 Until 24.10.2026 the file was only read by the **write** routes of that UI: after
 a restart the bridge started with the environment alone — the key was empty, a

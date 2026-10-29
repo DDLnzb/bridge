@@ -56,12 +56,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app ./app
 COPY src ./src
 
-# Create non-root user and a writable data directory. Docker copies the owner
-# and mode of this directory when it initializes a new named volume at /app/data.
-RUN useradd -m -u 1000 ddlnzb \
-    && mkdir -p /app/data \
-    && chown -R ddlnzb:ddlnzb /app
-USER ddlnzb
+# Run with Unraid's default bind-mount identity (`nobody:users`, 99:100), so
+# its appdata directory is writable without host-side permission changes.
+# Docker copies the owner and mode when it initializes a new named volume.
+RUN mkdir -p /app/data \
+    && chown -R 99:100 /app
+USER 99:100
 
 # Expose port (SABnzbd-compatible API)
 EXPOSE 6789
