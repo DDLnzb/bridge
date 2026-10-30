@@ -101,15 +101,15 @@ async def _einen_durchlauf(monkeypatch, paket):
 
 
 async def test_cloud_url_nimmt_die_release_id(aufrufe):
-    links = await download_handler._fetch_links_from_cloud(RELEASE_ID)
+    daten = await download_handler._fetch_release_data(RELEASE_ID)
 
-    assert links == ["https://example.invalid/a.bin"]
+    assert [link["url"] for link in daten["links"]] == ["https://example.invalid/a.bin"]
     assert aufrufe[0]["url"].endswith(f"/api/v1/links/{RELEASE_ID}")
 
 
 async def test_cloud_url_sendet_keine_query_parameter(aufrufe):
     """The mirror filter belonged to a by-source path that does not exist."""
-    await download_handler._fetch_links_from_cloud(RELEASE_ID)
+    await download_handler._fetch_release_data(RELEASE_ID)
 
     assert "params" not in aufrufe[0], (
         "Query parameters are sent to an endpoint that does not know them"
@@ -118,16 +118,16 @@ async def test_cloud_url_sendet_keine_query_parameter(aufrufe):
 
 async def test_release_id_wird_ins_pfadsegment_kodiert(aufrufe):
     """Unchecked payload content would otherwise land unencoded in the path."""
-    await download_handler._fetch_links_from_cloud("../../admin?x=1")
+    await download_handler._fetch_release_data("../../admin?x=1")
 
     assert aufrufe[0]["url"].endswith("/api/v1/links/..%2F..%2Fadmin%3Fx%3D1")
 
 
 async def test_leere_release_id_ruft_die_api_nicht(aufrufe):
     """Earlier this went into the by-source branch and ended in a 404."""
-    links = await download_handler._fetch_links_from_cloud("")
+    daten = await download_handler._fetch_release_data("")
 
-    assert links == []
+    assert daten is None
     assert aufrufe == [], "Without a release ID no request may go out"
 
 

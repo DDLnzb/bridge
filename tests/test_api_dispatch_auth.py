@@ -94,6 +94,28 @@ def test_kurzer_key_steht_nicht_vor_langem(client):
     assert antwort.json()["status"] is False
 
 
+def test_der_download_token_ist_keine_berechtigung(client):
+    """`addurl` is behind the key too - the token authorizes nothing.
+
+    The download token of the NZB link is read **without** verifying its
+    signature (see `app/AGENTS.md`). That is only harmless because the key
+    is the boundary of this hop: the token names a release, the key
+    authorizes the call. A mode that accepted a token without a key would
+    turn the unsigned token into a bearer credential.
+    """
+    antwort = client.get(
+        "/api",
+        params={
+            "mode": "addurl",
+            "name": "https://ddlnzb.invalid/api/download?payload=abc.def",
+            "nzbname": "release.nzb",
+            "apikey": "wrong-key",
+        },
+    )
+
+    assert antwort.json() == {"status": False, "error": "Invalid API key"}
+
+
 def test_vergleich_laeuft_ueber_compare_digest(client, monkeypatch):
     """The constant-time comparison must actually be called.
 

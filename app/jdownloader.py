@@ -163,6 +163,11 @@ class MyJDownloaderAPI:
 
         Returns `True` if the connection is up **and** the configured device was
         found - the web UI shows both as "connected".
+
+        On failure `last_error` carries the **current** reason - the login
+        error of JDownloader or the missing device. The web UI shows it
+        instead of a generic hint, so that "wrong password" and "device not
+        found" can be told apart (#681).
         """
         await self.disconnect()
 
@@ -170,9 +175,11 @@ class MyJDownloaderAPI:
         self.password = config.MYJD_PASSWORD
         self.device_name = config.MYJD_DEVICE_NAME
         self._client.set_app_key(config.MYJD_APP_KEY)
+        self.last_error = None
 
         if not self.email or not self.password:
             logger.warning("JDownloader credentials not configured - no connection")
+            self.last_error = "JDownloader credentials are not configured"
             return False
 
         try:
@@ -180,13 +187,17 @@ class MyJDownloaderAPI:
             device = await self.get_device()
         except Exception as exc:
             logger.error("JDownloader reconnect failed: %s", exc)
+            if not self.last_error:
+                self.last_error = str(exc)
             return False
 
         if not device:
             logger.warning("JDownloader device '%s' not found", config.MYJD_DEVICE_NAME)
+            self.last_error = f"device '{config.MYJD_DEVICE_NAME}' not found"
             return False
 
         logger.info("JDownloader neu verbunden: %s", device.get("name"))
+        self.last_error = None
         return True
 
     async def debug_snapshot(self) -> dict[str, Any]:

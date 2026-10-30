@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "DDLnzb Bridge - Local JDownloader Integration"
 authors = ["DDLnzb Team"]
 readme = "README.md"
-packages = [{include = "src"}]
+packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"

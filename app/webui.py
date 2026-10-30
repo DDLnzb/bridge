@@ -44,6 +44,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import settings as settings_store
 from app.config import config
+from app.heartbeat import jd_heartbeat
 from app.jdownloader import jdownloader
 from app.sabnzbd_api import download_queue
 from app.webui_templates import dashboard_page, login_page, setup_page
@@ -337,9 +338,21 @@ async def test_connections():
 
 @router.post("/reconnect", dependencies=[Depends(require_ui_auth)])
 async def reconnect():
-    """Reconnect JDownloader with the current credentials."""
+    """Reconnect JDownloader with the current credentials.
+
+    The heartbeat state is updated with the result (#681): a successful
+    reconnect clears the error of an earlier attempt, a failed one carries
+    the **current** reason instead of a generic hint.
+    """
     ok = await jdownloader.reconfigure()
-    detail = "connected" if ok else "no connection - check the credentials or the device name"
+    if ok:
+        jd_heartbeat.mark_connected()
+        detail = "connected"
+    else:
+        detail = jdownloader.last_error or (
+            "no connection - check the credentials or the device name"
+        )
+        jd_heartbeat.mark_failed(detail)
     record_test("jdownloader", ok, detail)
     return {"ok": ok, "detail": detail}
 

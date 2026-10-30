@@ -1,6 +1,7 @@
 # Bridge `app/` — AGENTS.md
 
-Production implementation. For the counterpart `../src/AGENTS.md` see the parent doc.
+Production implementation — the **only** one. The former second tree `src/`
+was removed on 30.10.2026 (#879); see the parent doc.
 
 ## Purpose
 
@@ -54,9 +55,11 @@ Two properties that must not get lost in changes:
 - **An empty configuration closes everything.** If `DDLNZB_API_KEY` is empty, no call is valid (`not config.DDLNZB_API_KEY or ...`). Otherwise a bridge without a key could be switched off.
 - **`secrets.compare_digest`, not `==`.** Constant-time comparison. As of 2026-10-19 that was only true for `main.py`; the dispatch in `sabnzbd_api.py` compared with `!=` (#478).
 
-  ⚠️ **Behavior tests do not distinguish this.** Both comparisons deliver the same answer, the difference lies only in the runtime. `tests/test_api_dispatch_auth.py` therefore observes the *call* of `compare_digest` via a dummy — confirmed with a mutation test that the remaining ten tests stay green on a return to `!=`. Anyone switching the check must maintain the spy, otherwise the protection is ineffective.
+  ⚠️ **Behavior tests do not distinguish this.** Both comparisons deliver the same answer, the difference lies only in the runtime. `tests/test_api_dispatch_auth.py` therefore observes the *call* of `compare_digest` via a dummy — confirmed with a mutation test that the remaining eleven tests stay green on a return to `!=`. Anyone switching the check must maintain the spy, otherwise the protection is ineffective.
 
 `mode=auth` returns `{"auth": "ok"}` — **no** key hash is compared, only equality.
+
+**The key gate stands in front of the mode dispatch, not inside it.** That is what makes the unsigned download token harmless: the token names a release, the key authorizes the call. A mode that accepted a token without a key would turn it into a bearer credential. `tests/test_api_dispatch_auth.py` pins that for `mode=addurl` — the mode the *arr apps use for the NZB link.
 
 ### Missing configuration is not an abort
 
@@ -206,50 +209,119 @@ The bridge needs **no** CORS at all: the *arr apps are not browsers, and the web
 
 ### Time limits are hardcoded
 
-Die `release_id` wird mit `quote(..., safe="")` ins Pfadsegment kodiert. Sie stammt aus einem Base64-Payload, wird aber **vor** der Interpolation als UUID geprüft (`_is_uuid()`) — ein Payload, das keine UUID liefert, wird verworfen. Der frühere `by-source`-Zweig (mit `source_url`/`hoster`-Param) ist entfernt — im Backend existiert dieser Pfad nicht, siehe `../AGENTS.md`.
-
 - Cloud calls: timeout 30s, 3 attempts, exponential backoff
 - JDownloader monitoring: 5s polling active / 300s idle, `max_duration = 30*60` (30 minutes)
 - Heartbeat: `HEARTBEAT_INTERVAL = 60`, `MAX_RECONNECT_ATTEMPTS = 3`, backoff `[5, 15, 30]`. Pings only when there are active downloads in the queue
 
 ### Error handling in the download loop
 
-`_fetch_links_from_cloud()` catches `httpx.RequestError` so that the retry is not broken. Unexpected errors abort the retry. Keep both in mind when changing it — catching too broadly hides errors, catching too narrowly wastes repetitions.
+`_fetch_release_data()` catches `httpx.RequestError` so that the retry is not broken. Unexpected errors abort the retry. Keep both in mind when changing it — catching too broadly hides errors, catching too narrowly wastes repetitions.
 
 The `release_id` is encoded into the path segment with `quote(..., safe="")`. It comes from a base64 payload and is checked as a UUID **before** it is interpolated into `GET /api/v1/links/{release_id}`. The former `by-source` branch (with the `source_url`/`hoster` parameter) has been removed — this path does not exist in the backend, see `../AGENTS.md`.
 
-### The sleep follows the package state, not the poll success
+### The link endpoint delivers more than links
 
-### Ein Decoder, zwei Aufrufer (#729)
+`_fetch_release_data()` returns the **complete** answer of
+`GET /api/v1/links/{release_id}` — not only the list of URLs. The answer
+carries `title`, `password` and `size_bytes` as well, and the bridge needs
+them when the payload is the **download token** of the NZB link: that token
+carries the release ID only (#789).
 
-`decode_payload()` in `sabnzbd_api.py` ist der **einzige** Decoder des
-Payload-Formats. `download_handler.py` importiert ihn (`from app.sabnzbd_api
-import decode_payload`) und ruft ihn auf — es gibt keine zweite Kopie.
+The precedence is: what the payload carries wins, the answer of the endpoint
+fills the gap:
 
-Bis zum 24.10.2026 existierte die Decode-Logik doppelt (`decode_payload` und
-`_parse_payload`); die Kopien konnten auseinanderlaufen, ohne dass ein Test
-das gemerkt hätte. Wer das Format ändert, ändert **eine** Stelle.
+```text
+title      = info.title     or release["title"]      or item.filename
+password   = info.password  or release["password"]
+size_bytes = info.size_bytes or release["size_bytes"]
+```
 
-Zwei Formate werden gelesen:
+A payload that cannot be decoded is **not** queued — `mode=addurl` and
+`mode=addfile` answer with `"Unreadable DDLnzb payload"` and the queue stays
+empty. Before that the entry went into the queue without a release ID and the
+download ended later with "Invalid payload".
 
-| Format | Bedingung |
+### The download token is read, not verified
+
+`_decode_download_token()` in `sabnzbd_api.py` reads the signed token of the
+NZB link (`<base64url(payload)>.<base64url(signature)>`) and returns the
+release ID out of it. **The signature is not checked** — the bridge does not
+know the secret of the backend and does not need it: it authorizes itself
+against the API with its own service key.
+
+⚠️ **The missing signature check is not an authorization bypass.** The
+boundary of this hop is the **API key of the bridge**, not the token:
+
+| Fact | Where |
 | --- | --- |
-| JSON (`{"v":2,…}`) | der aktuelle Stand; `v` muss `PAYLOAD_VERSION` sein |
-| Legacy (`title\|source\|…`) | nur bei **exakt** `LEGACY_FIELD_COUNT` Feldern **und** UUID in Feld 1 |
+| Every mode of the dispatch — `addurl` included — is gated by `secrets.compare_digest(apikey, config.DDLNZB_API_KEY)` | `sabnzbd_api.py` |
+| The bridge resolves the release with that **same** key (`X-API-Key`) | `download_handler.py` |
+| `GET /api/v1/links/{release_id}` selects the release by UUID **without an ownership check** — the only limit is the daily quota of the key's user | `backend/app/api/links.py` |
 
-Ein Payload, das weder das eine noch das andere ist, liefert `None` — der
-Download bricht ab, statt ein falsches Release zu laden. **Nichts wird
-geraten.**
+A caller who could forge a token therefore **already holds a key that
+resolves any release directly**. A signature check in the bridge would grant
+no further permission.
 
-Die Release-ID wird in **beiden** Formaten als UUID geprüft (`_is_uuid()`): das
-Backend kennt keine anderen IDs, und die ID wandert in den Pfad von
+The signature is verified where it protects something: the backend checks the
+token in `/api/download` (`verify_download_token()`), and only that path hands
+out the NZB file. Copying the signing secret into the bridge would put it on a
+second host — and this directory is mirrored into a public repository.
+
+⚠️ **The dot is detected before the base64 decode.** `.` is not a base64url
+character, and `urlsafe_b64decode` **silently discards** characters outside the
+alphabet. A decode first would build a nonsense string out of body and
+signature — the release ID would never be found and the download would end
+with "Invalid payload".
+
+### The heartbeat state follows the manual reconnect
+
+`POST /ui/reconnect` in `webui.py` updates the heartbeat state via
+`jd_heartbeat.mark_connected()` / `jd_heartbeat.mark_failed(detail)` (#681).
+Before that the state was only cleaned up in `_ping()`, and `_ping()` runs
+**only with active downloads** — without a download a stale error stood in
+`/status` forever.
+
+- `mark_connected()` clears the error and the counter of failed pings.
+- `mark_failed(message)` takes over the **current** reason — the JDownloader
+  error text, "credentials are not configured" or "device not found" — and
+  leaves the counter untouched on purpose: it belongs to the ping attempts, and
+  a counter pushed over `MAX_RECONNECT_ATTEMPTS` would stop the automatic
+  reconnect for good.
+
+`jdownloader.reconfigure()` sets `last_error` itself in every failure branch;
+the web UI prefers that text over its generic hint.
+
+### One decoder, two callers (#729)
+
+`decode_payload()` in `sabnzbd_api.py` is the **only** decoder of the payload
+format. `download_handler.py` imports it (`from app.sabnzbd_api import
+decode_payload`) and calls it — there is no second copy.
+
+Until 24.10.2026 the decode logic existed twice (`decode_payload` and
+`_parse_payload`); the copies could drift apart without a test noticing.
+Whoever changes the format changes **one** place.
+
+Three formats are read (the token is described above):
+
+| Format | Condition |
+| --- | --- |
+| JSON (`{"v":2,…}`) | the current state; `v` must be `PAYLOAD_VERSION` |
+| Legacy (`title\|source\|…`) | only with exactly `LEGACY_FIELD_COUNT` fields **and** a UUID in field 1 |
+| Download token | `<base64url(payload)>.<base64url(signature)>` with `v == DOWNLOAD_TOKEN_VERSION` |
+
+A payload that is none of them yields `None` — the download aborts instead of
+loading a wrong release. **Nothing is guessed.**
+
+The release ID is checked as a UUID in **all** formats (`_is_uuid()`): the
+backend knows no other IDs, and the ID travels in the path of
 `GET /api/v1/links/{release_id}`.
 
-⚠️ **Der Titel bestimmt nichts mehr.** Im Legacy-Format konnte ein `|` im
-Release-Titel die Felder verschieben — und damit bestimmen, welches Release
-geladen und mit welchem Passwort entpackt wird. Genau das ist der Befund #729.
+⚠️ **The title determines nothing any more.** In the legacy format a `|` in
+the release title shifted the fields — and thereby determined which release
+was loaded and with which password it was unpacked. That was the finding
+#729.
 
-### Division im Fortschritt
+### Division in the sleep
 
 `_monitor_jdownloader()` chooses between `active_interval` (5s) and `idle_interval` (300s) via the flag `matched`. That is a **state of the monitoring**, not the result of the single poll call, and therefore lives outside the `while` loop.
 
@@ -281,7 +353,7 @@ Covered by `tests/`:
 | File | Area |
 | --- | --- |
 | `test_bridge_auth.py` | `require_bridge_key`: all routes except `/health` |
-| `test_api_dispatch_auth.py` | Key check at the `/api` dispatch, including the `compare_digest` call |
+| `test_api_dispatch_auth.py` | Key check at the `/api` dispatch, including the `compare_digest` call and the gate in front of `mode=addurl` |
 | `test_queue_transitions.py` | `_move_to_history`, persistence across a restart, `mode=retry` |
 | `test_cloud_links.py` | URL construction from `release_id`, progress calculation |
 | `test_state_restore.py` | State restore across module import, roundtrip |
@@ -289,11 +361,15 @@ Covered by `tests/`:
 | `test_webui.py` | UI: setup token, login, session, saving, reset, secrets |
 | `test_settings_startup.py` | The settings file is applied at startup: key effective without a UI write, no setup token, precedence against the environment, broken file |
 | `test_cors_policy.py` | CORS policy: a foreign origin gets no header, a preflight is refused, a configured origin is allowed |
+| `test_default_urls.py` | One implementation, one default: no `src/`, no host without DNS in a shipped file, the API default in exactly one Python file, the live host resolves |
+| `test_addurl_token.py` | The download token of the NZB link: release ID in the queue entry, unreadable payload refused, title/password/size from the link endpoint |
+| `test_ui_reconnect.py` | The manual reconnect updates the heartbeat state in both directions; a failed reconnect does not count as a failed ping |
+| `test_jdownloader_reconfigure.py` | `reconfigure()` names the current reason in every failure branch: missing credentials, failed login, missing device |
 | `test_smoke.py` | Placeholder (`assert True`) |
 
 `test_monitor_intervals.py` fills `app.sabnzbd_api.download_queue` **directly** and replaces neither `asyncio.sleep` nor the time source of the handler permanently — see the `fresh_import()` warning in the parent doc. The 30-minute deadline is set via a context manager that replaces `asyncio.get_event_loop()` only during the handler call: a dummy on `loop.time` alone is not enough, because the event loop calls `self.time()` itself and the count would be off by one iteration.
 
-Still **without** tests: JDownloader connection, heartbeat, `queue_persistence`.
+Still **without** tests: JDownloader connection, the heartbeat loop itself, `queue_persistence`.
 
 ## Child DOX Index
 
