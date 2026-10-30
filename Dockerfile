@@ -29,13 +29,13 @@ WORKDIR /app
 
 # Install runtime dependencies.
 #
-# Die Debian-Repositories werden vor `apt-get update` auf HTTPS umgeschrieben.
-# Grund: der ops-Runner erreicht ausgehenden Verkehr auf Port 80 nicht (TCP-Timeout
-# gegen deb.debian.org), auf Port 443 dagegen schon. Ohne den Umbau bricht der
-# Image-Build an `apt-get update` ab - und mit ihm die ganze Kette
-# auto-tag -> docker-backend -> release -> deploy-dev. `ca-certificates` ist im
-# Basisimage bereits vorhanden, `apt` beherrscht HTTPS nativ.
-# Siehe Issue #850.
+# The Debian repositories are rewritten to HTTPS before `apt-get update` runs.
+# Reason: the ops runner cannot reach outbound traffic on port 80 (TCP timeout
+# against deb.debian.org), but port 443 works. Without the rewrite the image
+# build breaks at `apt-get update` - and with it the whole chain
+# auto-tag -> docker-backend -> release -> deploy-coolify. `ca-certificates` is
+# already part of the base image, `apt` speaks HTTPS natively.
+# See issue #850.
 RUN set -eux; \
     for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
         if [ -f "$f" ]; then \
@@ -53,8 +53,13 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
+#
+# Only `app/` - the production implementation. There used to be a second
+# tree (`src/`) with a stub SABnzbd API and its own, disjoint config
+# contract. It carried a default API URL for a host that does not resolve
+# and was never started. Both are gone: there is exactly one implementation
+# and exactly one default (#879).
 COPY app ./app
-COPY src ./src
 
 # Run with Unraid's default bind-mount identity (`nobody:users`, 99:100), so
 # its appdata directory is writable without host-side permission changes.
@@ -71,7 +76,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:6789/health || exit 1
 
 # Run application
-# Target path is app/, not src/: app/ is the production implementation and the
-# only path whose config variables are maintained in bridge/.env. src/ is
-# a stub with a disjoint config contract (see bridge/AGENTS.md).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6789"]

@@ -82,31 +82,46 @@ class DownloadHandler:
                 logger.warning("Invalid payload for %s", nzo_id)
                 return
 
-            # Das Payload traegt die Release-UUID - nicht die Portal-URL.
-            # Der Decoder ist der einzige Ort, der das Format kennt; er
-            # prueft die ID auch als UUID, bevor sie in einen Pfad wandert.
-            title = info.title
-            release_id = info.release_id
-            password = info.password
-            if info.size_bytes and info.size_bytes > 0:
-                set_item_size(item, info.size_bytes)
-            item.release_id = release_id
+            # The payload carries the release UUID - not the portal URL.
+            # The decoder is the only place that knows the format; it also
+            # checks the ID as a UUID before it goes into a path.
+            item.release_id = info.release_id
             logger.debug(
-                "Parsed payload for %s: title=%s mirror=%s size=%s",
+                "Parsed payload for %s: release=%s mirror=%s",
                 nzo_id,
-                title,
+                info.release_id,
                 info.mirror,
-                info.size_bytes,
             )
 
             update_progress(nzo_id, 10, "Getting download links...")
 
             # Fetch actual download links from DDLnzb Cloud
-            links = await self._fetch_links_from_cloud(item.release_id)
+            release = await self._fetch_release_data(item.release_id)
+            if not release:
+                fail_download(nzo_id, "No links available")
+                logger.warning("No release data for %s (%s)", nzo_id, info.release_id)
+                return
+
+            links = [link["url"] for link in release.get("links", []) if link.get("url")]
             if not links:
                 fail_download(nzo_id, "No links available")
-                logger.warning("No links available for %s (%s)", nzo_id, title)
+                logger.warning("No links available for %s (%s)", nzo_id, info.release_id)
                 return
+
+            # Title, password and size: the bridge payload carries them, the
+            # download token of the NZB link does not (#789). In that case
+            # they stand in the answer of the link endpoint.
+            title = info.title or release.get("title") or item.filename
+            password = info.password or release.get("password")
+            size_bytes = info.size_bytes or int(release.get("size_bytes") or 0)
+            if size_bytes > 0:
+                set_item_size(item, size_bytes)
+            logger.debug(
+                "Resolved %s: title=%s size=%s",
+                nzo_id,
+                title,
+                size_bytes,
+            )
 
             update_progress(nzo_id, 20, "Sending to JDownloader...")
             logger.debug("Fetched %s links for %s", len(links), nzo_id)
@@ -142,20 +157,27 @@ class DownloadHandler:
             logger.exception("Processing error for %s: %s", nzo_id, e)
             fail_download(nzo_id, str(e))
 
-    async def _fetch_links_from_cloud(
+    async def _fetch_release_data(
         self,
         release_id: str | None,
         max_retries: int = 3,
-    ) -> list[str]:
-        """Fetch download links from the DDLnzb Cloud API with retries.
+    ) -> dict | None:
+        """Fetch the release data from the DDLnzb Cloud API with retries.
 
         `release_id` is the release UUID. The backend knows exactly one
         endpoint: `GET /api/v1/links/{release_id}` - there is no `by-source`
         path, the former mirror filter was dead code.
+
+        The answer carries more than the links: `title`, `password` and
+        `size_bytes` belong to the release. The bridge needs them when the
+        payload is the **download token** of the NZB link - that token
+        carries the release ID only (#789).
+
+        `None` means: no data, no links, or the API was unreachable.
         """
         if not release_id:
             logger.error("Payload contains no release ID - cloud fetch skipped")
-            return []
+            return None
 
         backoff = 1
         # Encode the path segment: the ID comes from a base64 payload and is
@@ -202,15 +224,15 @@ class DownloadHandler:
                             release_id,
                             attempt,
                         )
-                        return links
+                        return data
                     logger.warning(
                         "Cloud returned no links for release %s",
                         release_id,
                     )
-                    return []
+                    return None
                 elif response.status_code in (404, 410):
                     logger.warning("Release not found for %s", release_id)
-                    return []
+                    return None
                 else:
                     logger.error(
                         "Cloud error %s for %s: %s",
@@ -239,7 +261,7 @@ class DownloadHandler:
             max_retries,
             config.DDLNZB_API_URL,
         )
-        return []
+        return None
 
     async def _monitor_jdownloader(self, nzo_id: str, package_name: str):
         """Monitor JDownloader download progress."""

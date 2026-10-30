@@ -25,15 +25,20 @@ STATE_PATH = Path(config.STATE_FILE).expanduser()
 
 router = APIRouter()
 
-#: Version des DDLnzb-Payload-Formats. Steht als Feld "v" im JSON-Objekt.
-#: Das Backend und die Bridge muessen dieselbe Version sprechen - siehe
+#: Version of the DDLnzb payload format. Carried as the field "v" in the JSON
+#: object. The backend and the bridge have to speak the same version - see
 #: `backend/app/scrapers/utils/payload.py`.
 PAYLOAD_VERSION = 2
 
-#: Feldzahl des alten `|`-Formats. Nur ein exakt passendes Legacy-Payload
-#: wird akzeptiert - mehr Felder bedeuten, dass ein `|` im Titel die Felder
-#: verschoben hat (#729).
+#: Field count of the old `|` format. Only an exactly matching legacy payload
+#: is accepted - more fields mean that a `|` in the title shifted the fields
+#: (#729).
 LEGACY_FIELD_COUNT = 6
+
+#: Version of the download token of the backend (`services/download_token.py`).
+#: The NZB link from the Newznab feed carries such a token - since #694 no
+#: API key, but a short-lived signed token.
+DOWNLOAD_TOKEN_VERSION = 1
 
 # In-memory queue and history
 download_queue: dict[str, "QueueItem"] = {}
@@ -512,8 +517,17 @@ async def _add_url(url: str, nzbname: str, category: str, output: str):
     """
     Add a download by URL.
 
-    The URL is expected to be a DDLnzb "fake NZB" URL containing
-    the release ID in the payload.
+    The URL is expected to be a DDLnzb NZB link. Two payloads are read:
+
+    * the **bridge payload** (JSON `{"v":2,…}`) in the `payload` parameter -
+      that is the format the NZB document carries;
+    * the **download token** (`<nutzlast>.<signatur>`) in the same parameter -
+      that is what the Newznab feed delivers since #694. It carries the
+      release ID only (#789).
+
+    The URL is **not** fetched: the bridge resolves the release through the
+    API with its own service key. That keeps this path free of a request
+    against an arbitrary host.
     """
     if not url:
         return _error_response("No URL provided", output)
@@ -521,6 +535,12 @@ async def _add_url(url: str, nzbname: str, category: str, output: str):
     payload = _extract_payload_from_url(url)
     if not payload:
         return _error_response("Invalid DDLnzb URL payload", output)
+
+    # A payload that cannot be decoded is not queued: the entry would carry
+    # no release ID and the download would end later with "Invalid payload".
+    # The caller learns about it right here.
+    if not decode_payload(payload):
+        return _error_response("Unreadable DDLnzb payload", output)
 
     item = _enqueue_payload(payload, nzbname, category)
 
@@ -542,6 +562,10 @@ async def _add_file(request: Request, nzbname: str, category: str, output: str):
     payload = _extract_payload_from_nzb(body)
     if not payload:
         return _error_response("NZB payload missing", output)
+
+    # As with `mode=addurl`: an unreadable payload is not queued.
+    if not decode_payload(payload):
+        return _error_response("Unreadable DDLnzb payload", output)
 
     item = _enqueue_payload(payload, nzbname, category)
 
@@ -795,17 +819,17 @@ def _extract_payload_from_url(url: str) -> str | None:
 def _extract_payload_from_nzb(data: bytes) -> str | None:
     """Extract the payload marker from a fake NZB file.
 
-    Reihenfolge der Quellen:
+    Order of the sources:
 
-    1. `<meta type="ddlnzb_payload">…</meta>` - das ist die Stelle, an der das
-       Backend den Payload ablegt.
-    2. `<payload>…</payload>` - der Rueckfall.
+    1. `<meta type="ddlnzb_payload">…</meta>` - that is where the backend
+       puts the payload.
+    2. `<payload>…</payload>` - the fallback.
 
-    ⚠️ **Nicht auf das erste `payload` im Dokument vertrauen.** Das NZB wird
-    zwar mit ElementTree gebaut (der Titel ist escaped), aber die Bridge
-    bekommt die Datei von aussen - ein fremdes NZB koennte an beliebiger Stelle
-    ein `<payload>`-Element einschleusen. Deshalb wird zuerst das Meta
-    gesucht, und der Titel eines fremden NZB darf kein Payload sein (#729).
+    ⚠️ **Do not trust the first `payload` in the document.** The NZB is built
+    with ElementTree (the title is escaped), but the bridge gets the file from
+    outside - a foreign NZB could smuggle in a `<payload>` element anywhere.
+    That is why the meta element is searched first, and the title of a foreign
+    NZB must never become a payload (#729).
     """
     try:
         text = data.decode("utf-8", errors="ignore")
@@ -826,22 +850,33 @@ def _extract_payload_from_nzb(data: bytes) -> str | None:
 def decode_payload(payload_str: str) -> PayloadInfo | None:
     """Decode Base64 Payload -> PayloadInfo.
 
-    Zwei Formate werden gelesen:
+    Three formats are read:
 
-    * **JSON (Version 2)** - der aktuelle Stand. Die Felder stehen als
-      Objekt, es gibt keinen Delimiter, ein `|` im Titel ist damit
-      unkritisch.
-    * **Das alte `|`-Format** - nur, wenn es eindeutig ist: exakt sechs
-      Felder und eine UUID in Feld 1. Ein Titel mit `|` erzeugt mehr
-      Felder; solch ein Payload wird verworfen, statt die Felder zu
-      verschieben. Vorher konnte ein Release-Titel damit bestimmen, **welches**
-      Release die Bridge aufloest (#729).
+    * **JSON (version 2)** - the current state. The fields stand as an
+      object, there is no delimiter, a `|` in the title is therefore
+      uncritical.
+    * **The old `|` format** - only when it is unambiguous: exactly six
+      fields and a UUID in field 1. A title with `|` produces more
+      fields; such a payload is discarded instead of shifting the fields.
+      Before, a release title could thereby determine **which** release the
+      bridge resolves (#729).
+    * **The download token** (`<payload>.<signature>`) - the NZB link from
+      the Newznab feed (#694, #789). It carries the release ID only; title,
+      password and size stand in the answer of the link endpoint.
 
-    Die Release-ID wird in beiden Faellen als UUID geprueft - das Backend
-    kennt keine anderen IDs, und der API-Aufruf traegt die ID im Pfad.
+    The release ID is checked as a UUID in **all** cases - the backend knows
+    no other IDs, and the API call carries the ID in the path.
     """
     if not payload_str:
         return None
+
+    # The download token stands **before** the base64 decode: the dot is not a
+    # base64url character, `urlsafe_b64decode` would silently discard it and
+    # build a nonsense character sequence out of body and signature.
+    token_info = _decode_download_token(payload_str)
+    if token_info is not None:
+        return token_info
+
     try:
         decoded = base64.urlsafe_b64decode(payload_str).decode("utf-8")
     except Exception:
@@ -854,8 +889,70 @@ def decode_payload(payload_str: str) -> PayloadInfo | None:
     return _decode_legacy_payload(decoded)
 
 
+def _decode_download_token(payload_str: str) -> PayloadInfo | None:
+    """Read the signed download token of the NZB link (#694, #789).
+
+    Format: `<base64url(payload)>.<base64url(signature)>`, the payload is
+    `{"v":1,"rid":<release-uuid>,"uid":<user-uuid>,"exp":<unix-ts>}`.
+
+    **The signature is not verified.** The bridge neither knows nor needs the
+    secret of the backend: it resolves the links with its own service
+    authorization (`GET /api/v1/links/{release_id}` with the API key of the
+    bridge). The token gives it the release ID alone.
+
+    Why that is not an authorization bypass: the boundary of this hop is the
+    **API key of the bridge**, not the token. Every mode of the dispatch is
+    gated by `secrets.compare_digest(apikey, config.DDLNZB_API_KEY)`, and
+    that same key resolves the release against the backend -
+    `GET /api/v1/links/{release_id}` selects the release by UUID **without an
+    ownership check**. A caller who could forge a token therefore already
+    holds a key that resolves any release directly; a signature check here
+    would grant no further permission.
+
+    The signature is verified where it protects something: the backend checks
+    the token in `/api/download` (`verify_download_token()` in
+    `backend/app/services/download_token.py`), and only that path hands out
+    the NZB file. Copying the signing secret into the bridge would put it on
+    a second host - and this directory is mirrored into a public repository.
+    That is a worse trade than the check it buys.
+
+    The token carries **no** title, **no** password and **no** size - those
+    stand in the answer of the link endpoint and are read there
+    (`app/download_handler.py`).
+    """
+    if payload_str.count(".") != 1:
+        return None
+    body, _signature = payload_str.split(".", 1)
+    try:
+        raw = json.loads(_b64decode(body))
+    except (ValueError, TypeError):
+        return None
+
+    if not isinstance(raw, dict) or raw.get("v") != DOWNLOAD_TOKEN_VERSION:
+        return None
+
+    release_id = str(raw.get("rid") or "")
+    if not _is_uuid(release_id):
+        return None
+
+    return PayloadInfo(
+        title="",
+        release_id=release_id,
+        mirror=None,
+        size_bytes=0,
+        password=None,
+        imdb_id=None,
+    )
+
+
+def _b64decode(value: str) -> bytes:
+    """Decode base64url without padding."""
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
 def _decode_json_payload(decoded: str) -> PayloadInfo | None:
-    """Das JSON-Format (Version 2) lesen."""
+    """Read the JSON format (version 2)."""
     try:
         raw = json.loads(decoded)
     except (ValueError, TypeError):
@@ -884,7 +981,7 @@ def _decode_json_payload(decoded: str) -> PayloadInfo | None:
 
 
 def _decode_legacy_payload(decoded: str) -> PayloadInfo | None:
-    """Das alte `|`-Format lesen - nur, wenn es eindeutig ist."""
+    """Read the old `|` format - only when it is unambiguous."""
     parts = decoded.split("|")
     if len(parts) != LEGACY_FIELD_COUNT:
         return None
@@ -910,7 +1007,7 @@ def _decode_legacy_payload(decoded: str) -> PayloadInfo | None:
 
 
 def _is_uuid(value: str) -> bool:
-    """Ist der Wert eine UUID? Die Bridge loest nur Release-UUIDs auf."""
+    """Is the value a UUID? The bridge resolves release UUIDs only."""
     if not value:
         return False
     try:

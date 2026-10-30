@@ -37,6 +37,29 @@ class JDownloaderHeartbeat:
         """Check if JDownloader connection is healthy."""
         return self._consecutive_failures == 0 and jdownloader.device_id is not None
 
+    def mark_connected(self) -> None:
+        """The connection works again - clear the error state (#681).
+
+        The web UI reconnects JDownloader (`POST /ui/reconnect`) but did not
+        touch the heartbeat state: a `last_error` from an earlier attempt
+        stayed in `/status` and `is_healthy` stayed `False`. The heartbeat
+        only cleans up in `_ping()`, and that runs **only with active
+        downloads** - without a download the stale error stood forever.
+        """
+        self._consecutive_failures = 0
+        self._last_error = None
+        self._last_success = datetime.utcnow()
+
+    def mark_failed(self, message: str) -> None:
+        """Note the **current** error - not an older one (#681).
+
+        The counter stays untouched on purpose: it belongs to the ping
+        attempts of the heartbeat. A manual reconnect that would push it
+        over `MAX_RECONNECT_ATTEMPTS` would stop the automatic reconnect
+        for good ("manual intervention required").
+        """
+        self._last_error = message
+
     @property
     def status(self) -> dict:
         """Get heartbeat status."""
@@ -94,9 +117,7 @@ class JDownloaderHeartbeat:
                 # Perform heartbeat check
                 success = await self._ping()
                 if success:
-                    self._consecutive_failures = 0
-                    self._last_success = datetime.utcnow()
-                    self._last_error = None
+                    self.mark_connected()
                     logger.debug("JDownloader heartbeat OK")
                 else:
                     self._consecutive_failures += 1
@@ -167,9 +188,7 @@ class JDownloaderHeartbeat:
 
             if device:
                 logger.info("Reconnected to JDownloader device: %s", device.get("name"))
-                self._consecutive_failures = 0
-                self._last_success = datetime.utcnow()
-                self._last_error = None
+                self.mark_connected()
                 return True
             else:
                 self._last_error = f"Device '{config.MYJD_DEVICE_NAME}' not found after reconnect"

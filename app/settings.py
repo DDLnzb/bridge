@@ -45,9 +45,9 @@ SETTINGS_VERSION = 1
 # reload.
 #
 # `DDLNZB_API_URL` is deliberately **not** in here: the bridge ships the API
-# URL itself (default `https://ddlnzb.pages.dev/api/app`). It is a deployment
-# setting and is set via the environment, not via the web UI - otherwise a
-# click in the web UI could redirect the bridge to any host.
+# URL itself (the default stands in `app/config.py`, `ENV_SOURCES`). It is a
+# deployment setting and is set via the environment, not via the web UI -
+# otherwise a click in the web UI could redirect the bridge to any host.
 FIELD_TYPES: dict[str, str] = {
     "DDLNZB_API_KEY": "secret",
     "MYJD_EMAIL": "str",

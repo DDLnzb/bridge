@@ -16,8 +16,7 @@ token is in the container log as long as no API key is stored yet.
 ## Ownership
 
 - `app/` — production implementation (FastAPI, SABnzbd API, JDownloader integration)
-- `src/` — stub/parallel implementation, see below
-- `Dockerfile`, `pyproject.toml`, `README.md` — the README documents the config contract of `app/`; the `src/` stub has its own, which no running process reads
+- `Dockerfile`, `pyproject.toml`, `README.md` — the README documents the config contract of `app/`
 - `.env`, `.env.example`
 - `docs/` — screenshots of the web UI (image files only, no documentation)
 
@@ -30,10 +29,11 @@ image `ghcr.io/ddlnzb/bridge` (linux/amd64 + linux/arm64).
 
 Consequences for changes here:
 
-- **Everything here is written in English.** The directory is copied verbatim
+- **The shipped code is written in English.** The directory is copied verbatim
   into a publicly readable repository. Comments, docstrings, the web UI labels
   and the documentation are all in English — a German sentence in a public
-  repository is a bug, not a style question.
+  repository is a bug, not a style question. The **test names** are an
+  exception: they are German throughout the suite, and they stay that way.
 - **`.env` must not end up in the mirror.** The file contains real credentials
   (`MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY`) and is neither versioned
   nor contained in the history of the mirrored repository — the sync filters it
@@ -49,32 +49,30 @@ Consequences for changes here:
 
 ## Local Contracts
 
-### `app/` and `src/` are two different systems
+### There is exactly one implementation
 
-This is the most important point in this directory.
+Until 30.10.2026 this directory held **two** trees: `app/` (the production
+implementation) and `src/` (a ~108 LOC stub with its own SABnzbd API, a
+disjoint config contract and `queue`/`history` as `# TODO`). The stub was never
+started — the `CMD` of the image points to `uvicorn app.main:app` — but it
+shipped in the image and carried a **default API URL for a host that does not
+resolve** (see #870). That URL was a trap: a reader could not tell which of
+the two defaults was the live one.
 
-| | `app/` | `src/` |
-| --- | --- | --- |
-| Scope | SABnzbd API, queue, JDownloader, cloud link fetch | ~108 LOC, `queue`/`history` as `# TODO` |
-| Config | `BridgeConfig` (dataclass), reads `bridge/.env` | `pydantic_settings.BaseSettings`, `env_file=".env"` |
-| Variables | `MYJD_EMAIL`, `MYJD_PASSWORD`, `MYJD_APP_KEY`, `DDLNZB_API_KEY` | `JD_EMAIL`, `JD_PASSWORD`, `JD_DEVICE`, `DDLNZB_BRIDGE_TOKEN` |
+Both are gone (#879). `src/` was deleted, the `Dockerfile` copies only `app/`,
+and `pyproject.toml` packages `app` instead of `src`.
 
-Both configs are **disjoint** — the same environment variable does not affect
-both.
+Consequences:
 
-**`app/` is the production path.** The `CMD` in the Dockerfile points to
-`uvicorn app.main:app` and therefore to `app/`. Evidence that this is the
-intended direction:
-
-- `bridge/.env` and `bridge/.env.example` maintain exclusively `app/` variables
-  (`MYJD_*`, `DDLNZB_API_KEY`). Not a single `src/` variable is set there.
-- `README.md` starts locally with `poetry run uvicorn app.main:app`.
-- Every reported bridge defect affects files in `app/`.
-
-`src/` is kept but not started. Whether `src/` disappears entirely is still open
-— that is a separate decision and not part of the CMD correction. The
-`Dockerfile` copies both directories (`COPY app ./app`, `COPY src ./src`); that
-is deliberate, so the stub does not disappear unnoticed.
+- **One implementation, one config contract, one default.** `ENV_SOURCES` in
+  `app/config.py` is the single source of truth for every variable and its
+  default. The API URL exists in exactly one Python file.
+- **The default points at the live host**: `https://ddlnzb.pages.dev/api/app`.
+  `tests/test_default_urls.py` holds that contract: it fails if a host without
+  a DNS record appears in a shipped file, if the default URL appears in a
+  second Python file, or if `src/` comes back.
+- **A new default URL belongs in `ENV_SOURCES`** — nowhere else. The web UI
+  labels and the README point at the variable, not at the value.
 
 ### The call direction is one-way
 
@@ -151,6 +149,85 @@ The payload is in the NZB document twice: in the `<meta type="ddlnzb_payload">`
 and in the `<payload>` element. The bridge reads the meta first and falls back
 to the element — **not** to an arbitrary `<payload>` anywhere: the file comes
 from outside, a foreign NZB could smuggle in such an element.
+
+### Three payload formats, one decoder
+
+`decode_payload()` reads **three** formats, and it is the only place that
+knows them:
+
+| Format | Condition |
+| --- | --- |
+| **JSON (version 2)** | the current state; `v` must be `PAYLOAD_VERSION` |
+| **Legacy pipe format** | only with exactly `LEGACY_FIELD_COUNT` fields **and** a UUID in field 1 |
+| **Download token** | `<base64url(payload)>.<base64url(signature)>` with `v == DOWNLOAD_TOKEN_VERSION` |
+
+The release ID is checked as a UUID in **all** formats — the backend knows no
+other IDs, and the API call carries the ID in the path.
+
+**The download token** comes from the NZB link in the Newznab feed. Since #694
+that link carries no API key any more, but a short-lived signed token
+(`backend/app/services/download_token.py`, TTL 2 h). The token carries the
+**release ID only** — no title, no password, no size (#789).
+
+The bridge reads the token **without verifying the signature**: it does not
+know the secret of the backend and does not need it — it resolves the release
+through its own service authorization (`GET /api/v1/links/{release_id}` with
+`X-API-Key`). The token gives it the release ID alone.
+
+⚠️ **The missing signature check is not an authorization bypass.** The
+boundary of this hop is the **API key of the bridge**: every mode of the
+dispatch is gated by `secrets.compare_digest(apikey, config.DDLNZB_API_KEY)`,
+and that same key resolves the release against the backend, where
+`GET /api/v1/links/{release_id}` selects the release by UUID **without an
+ownership check**. Whoever could forge a token already holds a key that
+resolves any release directly — a signature check here would grant no further
+permission. The signature is verified where it protects something: the
+backend checks the token in `/api/download`, and only that path hands out the
+NZB file. Copying the signing secret into the bridge would put it on a second
+host — and this directory is mirrored into a public repository.
+
+⚠️ **The dot must be detected before the base64 decode.** `.` is not a
+base64url character, and `urlsafe_b64decode` **silently discards** characters
+outside the alphabet — a decode first would build a nonsense string out of
+body and signature. The token branch therefore runs before the base64 branch.
+
+**A payload that cannot be decoded is not queued.** `mode=addurl` and
+`mode=addfile` answer with `"Unreadable DDLnzb payload"` and the queue stays
+empty. Before #789 the entry went into the queue without a release ID and the
+download ended later with "Invalid payload".
+
+### Title, password and size come from the link endpoint
+
+The download token carries the release ID only. Title, password and size stand
+in the answer of `GET /api/v1/links/{release_id}` — and the bridge takes them
+from there when the payload does not carry them itself
+(`app/download_handler.py::_fetch_release_data`).
+
+The bridge **does not fetch the URL** of the NZB link. It resolves the
+release through the API with its own service key — that keeps this path free
+of a request against an arbitrary host.
+
+### The heartbeat state follows the manual reconnect
+
+`POST /ui/reconnect` reconnects JDownloader with the current credentials. It
+also updates the heartbeat state, in both directions (#681):
+
+- **success** → `jd_heartbeat.mark_connected()`: the error of an earlier
+  attempt is cleared, the counter of failed pings goes back to zero.
+- **failure** → `jd_heartbeat.mark_failed(detail)`: the **current** reason is
+  taken over — the JDownloader error text, "credentials are not configured"
+  or "device not found" — instead of a generic hint.
+
+Before that the state was only cleaned up in `_ping()`, and `_ping()` runs
+**only with active downloads** in the queue. Without a download a stale error
+stood in `/status` forever and `is_healthy` stayed `False` although the
+connection worked.
+
+⚠️ **A manual reconnect does not count as a failed ping.** `mark_failed()`
+leaves the counter untouched on purpose — it belongs to the ping attempts of
+the heartbeat. A counter that the manual reconnect pushes over
+`MAX_RECONNECT_ATTEMPTS` would stop the automatic reconnect for good
+("manual intervention required").
 
 ### Image architectures
 
@@ -238,8 +315,8 @@ poetry run python -m pytest tests/ -v
 ```
 
 ⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The `bridge` job in
-`ci.yml` runs `poetry run pytest -v` — so the tests do run: 12 test files with
-105 test cases (as of 24.10.2026). Covered are auth, API
+`ci.yml` runs `poetry run pytest -v` — so the tests do run: 17 test files with
+142 test cases (as of 30.10.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
 connection), the payload format (`tests/test_payload.py`: JSON v2, legacy
@@ -261,6 +338,23 @@ it also holds the rule that **`environment` wins over `env_file`**: the API key
 must not appear in the `environment` section of the bridge service, because an
 empty entry there overwrites the key from `bridge/.env` with an empty string
 (#716). The bridge then starts without a key and rejects every SABnzbd call.
+
+Four files came with the batch of 30.10.2026:
+
+- `test_default_urls.py` — one implementation, one default: `src/` must not
+  exist, no host without a DNS record may appear in a shipped file, the API
+  default may appear in exactly one Python file, and the live host must
+  resolve (#879).
+- `test_addurl_token.py` — the download token of the NZB link: the queue entry
+  gets the release ID, an unreadable payload is refused instead of queued, and
+  title/password/size are taken from the link endpoint (#789).
+- `test_ui_reconnect.py` — the manual reconnect updates the heartbeat state in
+  both directions, and a failed reconnect does not count as a failed ping
+  (#681).
+- `test_jdownloader_reconfigure.py` — `reconfigure()` names the **current**
+  reason in every failure branch: missing credentials, a failed login, a
+  missing device. A branch that returned `False` without setting `last_error`
+  would leave the error of an earlier attempt standing in the status (#681).
 
 Not tested is **`app/heartbeat.py::_heartbeat_loop`** — the heartbeat client.
 The two tests with "heartbeat" in their name (`test_bridge_auth.py`) only check
@@ -319,6 +413,3 @@ scrapes the bridge via `GET /metrics`.
 | Child | Scope |
 | --- | --- |
 | [`app/AGENTS.md`](app/AGENTS.md) | Production implementation with SABnzbd API and JDownloader |
-
-`src/` is deliberately **without** its own doc: it is a stub with a deviating
-config contract and is not started by the image. Whether it is removed is open.
