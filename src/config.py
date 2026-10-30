@@ -15,7 +15,14 @@ class Settings(BaseSettings):
     )
 
     # DDLnzb Cloud Connection
-    DDLNZB_API_URL: str = "https://api.ddlnzb.com"
+    # Der Default zeigt bewusst auf den **live** erreichbaren Host. Er stand
+    # vorher auf `https://api.ddlnzb.com` - eine Domain ohne jeden DNS-Record,
+    # die also nie aufloesen konnte (#879). Wer den Stub startet, sprach damit
+    # ins Leere; der Fehler fiel nur als "keine Verbindung" auf, ohne die
+    # Ursache zu nennen.
+    #
+    # `app/config.py` nutzt denselben Wert - beide Pfade muessen zusammenpassen.
+    DDLNZB_API_URL: str = "https://ddlnzb.pages.dev/api/app"
     DDLNZB_BRIDGE_TOKEN: str = ""
 
     # JDownloader Credentials
