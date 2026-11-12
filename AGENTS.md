@@ -314,8 +314,9 @@ cd bridge && poetry run ruff check .
 poetry run python -m pytest tests/ -v
 ```
 
-⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The `bridge` job in
-`ci.yml` runs `poetry run pytest -v` — so the tests do run: 17 test files with
+⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The bridge tests
+**run locally** — the CI job `tests` was removed on 12.11.2026, so the `bridge`
+arm of the `lint` job now only runs `ruff`. The suite has 17 test files with
 142 test cases (as of 30.10.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
