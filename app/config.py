@@ -58,7 +58,15 @@ ENV_SOURCES: dict[str, tuple[str, Callable[[str], Any], Any]] = {
     "DOWNLOAD_DIR": ("DOWNLOAD_DIR", str, "./downloads"),
     "EXTRACT_ARCHIVES": ("EXTRACT_ARCHIVES", _as_bool, True),
     "DELETE_ARCHIVES": ("DELETE_ARCHIVES", _as_bool, True),
-    "STATE_FILE": ("DDLNZB_STATE_FILE", str, "./ddlnzb_bridge_state.json"),
+    # The state file (queue + history) lies in the **data directory** - that
+    # is the mounted volume. A rollout (`docker compose up -d --force-recreate`,
+    # the way Coolify restarts a service) takes the writable layer of the
+    # container with it: a state file outside the volume is gone with every
+    # restart (#1049).
+    #
+    # A relative value is resolved against `DDLNZB_DATA_DIR`, never against
+    # the working directory of the process (that is the container root).
+    "STATE_FILE": ("DDLNZB_STATE_FILE", str, "state.json"),
     "DATA_DIR": ("DDLNZB_DATA_DIR", str, str(BASE_DIR / "data")),
     # Explicit CORS allowlist (comma separated). Empty by default: the bridge
     # needs no CORS at all - the *arr apps are not browsers and the web UI is
@@ -94,8 +102,10 @@ class BridgeConfig:
     # Category Mapping (SABnzbd category -> JDownloader folder)
     CATEGORY_MAPPING: dict = None
 
-    # Persistence
-    STATE_FILE: str = "./ddlnzb_bridge_state.json"
+    # Persistence. The defaults here are only the fallback for a direct
+    # instantiation - the values come from `ENV_SOURCES` via `_apply_env()`,
+    # and the paths are made absolute there (#1049).
+    STATE_FILE: str = "state.json"
     DATA_DIR: str = ""
 
     # CORS allowlist - empty by default, see `ENV_SOURCES`.
@@ -132,6 +142,34 @@ class BridgeConfig:
             raw = os.getenv(env_name)
             value = default if raw is None or raw == "" else cast(raw)
             setattr(self, field_name, value)
+
+        self._resolve_paths()
+
+    def _resolve_paths(self) -> None:
+        """Make the paths of the persistent state absolute.
+
+        The data directory is the mounted volume - the state file has to
+        survive a rollout. A relative path is therefore resolved against
+        `DATA_DIR` and **not** against the working directory of the
+        process: that is the container root, whose writable layer is
+        thrown away with every restart (#1049).
+
+        A relative `DATA_DIR` is resolved against the base directory of the
+        bridge - the directory the code lives in. That is stable, whatever
+        the working directory of the process happens to be.
+
+        An absolute path is taken as it is - that is the way to put the
+        file somewhere else.
+        """
+        data_dir = Path(self.DATA_DIR).expanduser()
+        if not data_dir.is_absolute():
+            data_dir = BASE_DIR / data_dir
+        self.DATA_DIR = str(data_dir)
+
+        state_file = Path(self.STATE_FILE).expanduser()
+        if not state_file.is_absolute():
+            state_file = data_dir / state_file
+        self.STATE_FILE = str(state_file)
 
     def apply_overrides(self, overrides: dict[str, Any]) -> None:
         """Apply the stored overrides onto the object.

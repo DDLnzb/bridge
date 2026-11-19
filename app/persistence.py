@@ -6,7 +6,7 @@ Persists download queue to JSON file for recovery after restart.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,20 @@ logger = logging.getLogger("ddlnzb.bridge.persistence")
 # Default persistence file path
 DEFAULT_QUEUE_FILE = Path(config.DATA_DIR) / "queue.json"
 SCHEMA_VERSION = 1
+
+
+def _feld(item: Any, name: str, default: Any = None) -> Any:
+    """Read one field from a queue item, whatever form it has.
+
+    The queue holds `QueueItem` dataclasses, but the persistence layer also
+    accepts plain dictionaries. The branch on the type is therefore
+    explicit.
+
+    The history of the bug this replaces is in `app/AGENTS.md` (#1048).
+    """
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
 
 
 class QueuePersistence:
@@ -42,25 +56,31 @@ class QueuePersistence:
         try:
             jobs = []
             for nzo_id, item in queue.items():
+                added_at = _feld(item, "added_at")
+                if isinstance(added_at, datetime):
+                    added_at = added_at.isoformat()
                 job = {
                     "id": nzo_id,
-                    "status": getattr(item, "status", item.get("status", "Unknown")),
-                    "filename": getattr(item, "filename", item.get("filename", "")),
-                    "category": getattr(item, "category", item.get("category", "")),
-                    "payload": getattr(item, "payload", item.get("payload", "")),
-                    "size": getattr(item, "size", item.get("size", "")),
-                    "links": getattr(item, "links", item.get("links", [])),
-                    "release_id": getattr(item, "release_id", item.get("release_id", "")),
-                    "created_at": getattr(
-                        item, "created_at", item.get("created_at", datetime.utcnow().isoformat())
-                    ),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "status": _feld(item, "status", "Unknown"),
+                    "filename": _feld(item, "filename", ""),
+                    "category": _feld(item, "category", ""),
+                    "payload": _feld(item, "payload", ""),
+                    # The dataclass knows `size_bytes` and `sizeleft_bytes` -
+                    # the byte counts are the only source of the size. The
+                    # old names `size`/`created_at` belonged to no field of
+                    # the dataclass and stayed empty (#1048).
+                    "size_bytes": _feld(item, "size_bytes", 0),
+                    "sizeleft_bytes": _feld(item, "sizeleft_bytes", 0),
+                    "links": _feld(item, "links", []),
+                    "release_id": _feld(item, "release_id", ""),
+                    "added_at": added_at or datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 jobs.append(job)
 
             data = {
                 "version": SCHEMA_VERSION,
-                "saved_at": datetime.utcnow().isoformat(),
+                "saved_at": datetime.now(timezone.utc).isoformat(),
                 "jobs": jobs,
             }
 

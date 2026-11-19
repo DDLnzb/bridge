@@ -6,7 +6,7 @@ Background task that maintains JDownloader connection when downloads are active.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import config
 from app.jdownloader import jdownloader
@@ -48,7 +48,7 @@ class JDownloaderHeartbeat:
         """
         self._consecutive_failures = 0
         self._last_error = None
-        self._last_success = datetime.utcnow()
+        self._last_success = datetime.now(timezone.utc)
 
     def mark_failed(self, message: str) -> None:
         """Note the **current** error - not an older one (#681).

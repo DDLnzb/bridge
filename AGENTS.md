@@ -105,6 +105,18 @@ appdata ownership, and creates `/app/data` owned by that identity so a new
 Docker named volume is writable. Bind-mounted host directories must be
 writable by UID 99 and GID 100; existing mounts retain their prior ownership.
 
+⚠️ **The data directory is the one place where the state lives.** Queue,
+history and the settings file belong there — it is the only path that
+survives a rollout. `DDLNZB_STATE_FILE` is resolved against it (see
+"Two persistence mechanisms" below). **A container that mounts its data
+directory somewhere else must set `DDLNZB_DATA_DIR` accordingly** — the
+default points at `<base>/data`, which is `/app/data` in the image but is
+**not** a mount on every host. The Unraid container mounts the appdata
+directory at `/app/data/data` (verified via the `unraid` MCP tools on
+18.11.2026) and therefore needs `DDLNZB_DATA_DIR=/app/data/data` — otherwise
+the state is written into the writable layer of the container and is lost
+with every restart.
+
 Until 24.10.2026 the file was only read by the **write** routes of that UI: after
 a restart the bridge started with the environment alone — the key was empty, a
 setup token went into the log and every *arr call was answered with 401, although
@@ -298,14 +310,24 @@ live under `/ui/static`. There is no second port.
   `.env.example` describing a JSON string override is **not implemented** — the
   example value misleads.
 - Two persistence mechanisms run in parallel: `sabnzbd_api._persist_state()`
-  writes the complete queue + history into `STATE_PATH`, `persistence.QueuePersistence`
-  writes only the queue to `DATA_DIR/queue.json` (with atomic write via `.tmp` +
-  `replace()`). Both are used independently in the lifespan.
+  writes the complete queue + history into `STATE_PATH` **and** the queue to
+  `DATA_DIR/queue.json` (with atomic write via `.tmp` + `replace()`). Both
+  happen at the same moment — on every change of the queue or the history.
+  A queue file that is only written at the shutdown would bring back jobs
+  that were completed or deleted in the meantime (#1048).
+- **Both write into `DDLNZB_DATA_DIR`** — the mounted volume. A relative
+  state path is resolved against that directory, never against the working
+  directory of the process: that is the container root, whose writable layer
+  is thrown away with every rollout. Queue and history were empty again
+  after every restart (#1049). Details in [`app/AGENTS.md`](app/AGENTS.md).
 - The state file keeps the size in **bytes** (`size_bytes`, `sizeleft_bytes`),
   not as text. Older files with `size`/`sizeleft` are converted on load via
   `_bytes_aus_groessen_text()`. Unknown fields in the file are discarded
   (`_bekannte_felder()`) — otherwise `_load_state()` swallows the error and the
   queue is **silently empty** after a restart.
+- Every timestamp of the bridge is an **aware** UTC datetime. A naive one
+  would be read as local time by `timestamp()` — the history was an hour in
+  the past with `TZ=Europe/Berlin` (#1051).
 
 ## Verification
 
@@ -316,8 +338,8 @@ poetry run python -m pytest tests/ -v
 
 ⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The bridge tests
 **run locally** — the CI job `tests` was removed on 12.11.2026, so the `bridge`
-arm of the `lint` job now only runs `ruff`. The suite has 17 test files with
-142 test cases (as of 30.10.2026). Covered are auth, API
+arm of the `lint` job now only runs `ruff`. The suite has 21 test files with
+167 test cases (as of 18.11.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
 connection), the payload format (`tests/test_payload.py`: JSON v2, legacy
@@ -357,11 +379,39 @@ Four files came with the batch of 30.10.2026:
   missing device. A branch that returned `False` without setting `last_error`
   would leave the error of an earlier attempt standing in the status (#681).
 
+Four files came with the batch of 18.11.2026 (the four bridge findings):
+
+- `test_api_key_comparison.py` — the API key comparison runs over **bytes**:
+  a key with a non-ASCII character is rejected with a 401 instead of
+  crashing the request with a 500 (#1050). The observation of the *call* of
+  `compare_digest` lives in `test_api_dispatch_auth.py` — a behaviour test
+  cannot tell `!=` from `compare_digest`.
+- `test_queue_persistence.py` — the queue persistence writes a file at all,
+  with the field names of the dataclass (`size_bytes`, `sizeleft_bytes`,
+  `added_at`), for **both** item forms — the dataclass and a plain dict
+  (#1048). It also holds the two properties that only show up in the
+  **restore**: the fields come back (`release_id`, size), and the queue file
+  is written at every change — a file that is only written at the shutdown
+  brings back jobs that were completed or deleted in the meantime.
+- `test_state_location.py` — the state file lies under `DDLNZB_DATA_DIR` and
+  the path is absolute; a relative path is resolved against the data
+  directory, never against the working directory of the process (#1049).
+- `test_history_timestamp.py` — the history timestamp is the real Unix
+  timestamp, in every timezone of the container: the same moment yields the
+  same value under `TZ=UTC` and `TZ=Europe/Berlin` (#1051). A naive
+  timestamp — the form a state file of an older version holds — is read as
+  UTC at the client boundary too.
+
+  ⚠️ **The fixture `in_zeitzone` restores the timezone itself.** The
+  teardown of `monkeypatch` runs *after* the teardown of the fixture, so a
+  `time.tzset()` in the fixture teardown would re-read the timezone of the
+  test and leave the **process** in it — every following test would run in
+  Berlin time without saying so.
+
 Not tested is **`app/heartbeat.py::_heartbeat_loop`** — the heartbeat client.
 The two tests with "heartbeat" in their name (`test_bridge_auth.py`) only check
 that `/heartbeat/reconnect` answers with 401 without a valid key; the loop
-itself runs in no test. The queue persistence is untested as well. A green
-bridge job says nothing about these paths.
+itself runs in no test. A green bridge job says nothing about this path.
 
 `tests/conftest.py` provides `state_file` (state file in `tmp_path`, sets
 `DDLNZB_STATE_FILE`) and `fresh_import` (reloads `app.config` and

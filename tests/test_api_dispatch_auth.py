@@ -127,8 +127,12 @@ def test_vergleich_laeuft_ueber_compare_digest(client, monkeypatch):
     That is why the call is observed instead of the result: the function is
     replaced by a decoy that passes the real result through and notes in the
     process that it was involved at all.
+
+    The comparison lives in `app/api_key.py` - the one place that knows how
+    the key is compared. The arguments are **bytes**: `compare_digest`
+    refuses `str` arguments with non-ASCII characters (#1050).
     """
-    import app.sabnzbd_api as sabnzbd_api
+    import app.api_key as api_key
 
     aufrufe = []
     original = secrets.compare_digest
@@ -137,9 +141,9 @@ def test_vergleich_laeuft_ueber_compare_digest(client, monkeypatch):
         aufrufe.append((a, b))
         return original(a, b)
 
-    monkeypatch.setattr(sabnzbd_api.secrets, "compare_digest", spy)
+    monkeypatch.setattr(api_key.secrets, "compare_digest", spy)
 
     antwort = client.get("/api", params={"mode": "auth", "apikey": KEY})
 
     assert antwort.json() == {"auth": "ok"}
-    assert aufrufe == [(KEY, KEY)]
+    assert aufrufe == [(KEY.encode("utf-8"), KEY.encode("utf-8"))]

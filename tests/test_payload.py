@@ -17,10 +17,30 @@ from uuid import uuid4
 
 import pytest
 
-from app.sabnzbd_api import QueueItem, _extract_payload_from_nzb, decode_payload, download_queue
+from app.sabnzbd_api import (
+    QueueItem,
+    _extract_payload_from_nzb,
+    decode_payload,
+    download_history,
+    download_queue,
+)
 
 PAYLOAD_VERSION = 2
 LEGACY_FIELD_COUNT = 6
+
+
+@pytest.fixture(autouse=True)
+def leere_history():
+    """The history is a module global - a test must not leave entries in it.
+
+    The download handler moves a finished entry from the queue into the
+    history. A leftover entry stayed in the module and was written into the
+    state file by the **next** test that persisted a state - a file in the
+    working tree that a local bridge restores at the next start.
+    """
+    download_history.clear()
+    yield
+    download_history.clear()
 
 
 def _encode_json(**overrides) -> str:
@@ -239,7 +259,6 @@ class TestDownloadHandlerUsesThePayload:
 
     async def test_der_titel_bestimmt_nicht_die_release_id(self, monkeypatch, cloud_aufrufe):
         """Der Angriff aus #729: der Titel nennt eine fremde Release-ID."""
-        import app.sabnzbd_api as sabnzbd_api
         from app.download_handler import download_handler
 
         eigene_id = str(uuid4())
@@ -248,7 +267,12 @@ class TestDownloadHandlerUsesThePayload:
 
         # Der Handler darf den State nicht schreiben - der Test laeuft
         # sonst in die State-Datei des Arbeitsverzeichnisses.
-        monkeypatch.setattr(sabnzbd_api, "_persist_state", lambda: None)
+        # ⚠️ **Der Patch sitzt an `app.download_handler`**, nicht an
+        # `app.sabnzbd_api`: der Handler bindet `complete_download` **beim
+        # Import**. Ein Patch am Modul `app.sabnzbd_api` erreicht eine
+        # andere Instanz - der Handler schrieb in die State-Datei des
+        # Arbeitsverzeichnisses.
+        monkeypatch.setattr("app.download_handler.complete_download", lambda *a, **kw: None)
 
         download_queue.clear()
         item = QueueItem(
@@ -270,10 +294,12 @@ class TestDownloadHandlerUsesThePayload:
 
     async def test_ein_unlesbares_payload_wird_verworfen(self, monkeypatch, cloud_aufrufe):
         """Ein kaputtes Payload darf keinen API-Aufruf ausloesen."""
-        import app.sabnzbd_api as sabnzbd_api
         from app.download_handler import download_handler
 
-        monkeypatch.setattr(sabnzbd_api, "_persist_state", lambda: None)
+        # Der Patch sitzt an `app.download_handler` - der Handler bindet
+        # `fail_download` **beim Import** (siehe der andere Test derselben
+        # Datei).
+        monkeypatch.setattr("app.download_handler.fail_download", lambda *a, **kw: None)
 
         download_queue.clear()
         item = QueueItem(

@@ -5,8 +5,12 @@
 !.env.example
 
 # Bridge runtime state (download queue and history)
+# The code writes it into the data directory since #1049 - the entries stay
+# because the path follows the configuration.
 ddlnzb_bridge_state.json
+state.json
 *.state.json
+data/
 
 # Python
 __pycache__/

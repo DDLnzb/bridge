@@ -88,12 +88,19 @@ def settings_path() -> Path:
     `DDLNZB_SETTINGS_FILE` wins, then `DDLNZB_DATA_DIR`, then the default
     `bridge/data/`. Deliberately without importing `app.config` - that would
     create a cycle, because `config` loads the settings on reload.
+
+    ⚠️ **A relative `DDLNZB_DATA_DIR` is resolved against the base
+    directory**, exactly as in `app/config.py`: the settings file and the
+    queue must not land in two different places. The working directory of
+    the process is not a stable anchor - in the container it is the root.
     """
     explicit = os.getenv("DDLNZB_SETTINGS_FILE")
     if explicit:
         return Path(explicit).expanduser()
-    data_dir = os.getenv("DDLNZB_DATA_DIR") or str(BASE_DIR / "data")
-    return Path(data_dir).expanduser() / "settings.json"
+    data_dir = Path(os.getenv("DDLNZB_DATA_DIR") or (BASE_DIR / "data")).expanduser()
+    if not data_dir.is_absolute():
+        data_dir = BASE_DIR / data_dir
+    return data_dir / "settings.json"
 
 
 def load() -> dict[str, Any]:

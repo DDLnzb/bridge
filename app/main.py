@@ -5,7 +5,6 @@ Local bridge that acts as SABnzbd for *arr apps and sends downloads to JDownload
 """
 
 import logging
-import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import webui
+from app.api_key import key_matches
 from app.config import config
 from app.download_handler import download_handler
 from app.heartbeat import jd_heartbeat
@@ -29,7 +29,7 @@ from app.metrics import (
     metrics_payload,
 )
 from app.persistence import queue_persistence
-from app.sabnzbd_api import QueueItem, download_queue
+from app.sabnzbd_api import download_queue, queue_item_from_dict
 from app.sabnzbd_api import router as sabnzbd_router
 from app.webui import router as webui_router
 
@@ -100,14 +100,24 @@ async def lifespan(app: FastAPI):
                 if job.get("status") in ("Queued", "Downloading"):
                     nzo_id = job.get("id")
                     if nzo_id and nzo_id not in download_queue:
-                        item = QueueItem(
-                            nzo_id=nzo_id,
-                            filename=job.get("filename", ""),
-                            category=job.get("category", ""),
-                            payload=job.get("payload", ""),
+                        item = queue_item_from_dict(
+                            {
+                                "nzo_id": nzo_id,
+                                "filename": job.get("filename", ""),
+                                "category": job.get("category", ""),
+                                "payload": job.get("payload", ""),
+                                # The fields the persistence writes - without
+                                # them the restored entry is a hollow shell:
+                                # the download handler needs the release ID to
+                                # resolve the links, and the *arr apps read
+                                # the size.
+                                "release_id": job.get("release_id") or None,
+                                "size_bytes": job.get("size_bytes", 0),
+                                "sizeleft_bytes": job.get("sizeleft_bytes", 0),
+                                "links": job.get("links", []),
+                            }
                         )
                         item.status = "Queued"  # Reset to queued for retry
-                        item.links = job.get("links", [])
                         download_queue[nzo_id] = item
             logger.info("Restored %d pending jobs from persistence", len(download_queue))
     except Exception as e:
@@ -264,9 +274,7 @@ async def require_bridge_key(
     if authorization and authorization.lower().startswith("bearer "):
         bearer = authorization[7:].strip()
     presented = x_api_key or apikey or bearer
-    if not config.DDLNZB_API_KEY or not secrets.compare_digest(
-        presented or "", config.DDLNZB_API_KEY
-    ):
+    if not key_matches(presented, config.DDLNZB_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 

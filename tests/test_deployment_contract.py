@@ -273,3 +273,40 @@ def test_readme_nennt_den_sabnzbd_port_6789() -> None:
         "The image starts uvicorn via CMD with --host 0.0.0.0 --port 6789 - "
         "BRIDGE_PORT only applies to local runs."
     )
+
+
+def test_die_state_datei_landet_im_gemounteten_datenverzeichnis() -> None:
+    """The state file must survive a rollout - so it belongs in the volume.
+
+    The bridge wrote its state to `/app/ddlnzb_bridge_state.json`, outside
+    the mounted volume. A rollout (`docker compose up -d --force-recreate`,
+    the way Coolify restarts a service) threw the writable layer of the
+    container away: queue and history were empty again (#1049).
+
+    The contract has two halves: the code resolves a relative state path
+    against `DDLNZB_DATA_DIR` (see `tests/test_state_location.py`), and the
+    compose file mounts that directory. This test holds the second half.
+    """
+    block = _service_block(COMPOSE_FILE.read_text(), "bridge")
+
+    daten_dir = re.search(r"DDLNZB_DATA_DIR=(\S+)", block)
+    assert daten_dir, (
+        "The bridge service does not set DDLNZB_DATA_DIR.\n"
+        f"Block:\n{block}\n"
+        "Without it the queue, the settings file and the state file have no "
+        "common home - and the state file ends up outside the volume (#1049)."
+    )
+
+    pfad = daten_dir.group(1)
+    assert pfad.startswith("/"), (
+        f"DDLNZB_DATA_DIR={pfad!r} is not absolute. A relative data directory "
+        "resolves against the working directory of the process - that is the "
+        "container root, whose writable layer does not survive a rollout."
+    )
+
+    gemountet = re.search(rf"^\s*-\s*\S+:{re.escape(pfad)}\s*$", block, re.M)
+    assert gemountet, (
+        f"DDLNZB_DATA_DIR={pfad!r} is not a mount point of the bridge "
+        f"service.\nBlock:\n{block}\n"
+        "Everything the bridge must not lose has to live in the volume."
+    )
