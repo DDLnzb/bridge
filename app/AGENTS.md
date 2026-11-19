@@ -50,12 +50,15 @@ There are **two** separate checks, both against `config.DDLNZB_API_KEY`:
 
 The **bearer** path exists for Prometheus: it cannot set a free-form header, only `bearer_token_file`. Without this path a protected `/metrics` could not be queried. It must not be removed as long as the monitoring stack scrapes the bridge via `bridge:6789/metrics`.
 
-Two properties that must not get lost in changes:
+Three properties that must not get lost in changes:
 
 - **An empty configuration closes everything.** If `DDLNZB_API_KEY` is empty, no call is valid (`not config.DDLNZB_API_KEY or ...`). Otherwise a bridge without a key could be switched off.
 - **`secrets.compare_digest`, not `==`.** Constant-time comparison. As of 2026-10-19 that was only true for `main.py`; the dispatch in `sabnzbd_api.py` compared with `!=` (#478).
+- **The comparison runs over bytes.** `secrets.compare_digest` raises a `TypeError` when it compares two `str` arguments and one of them contains a non-ASCII character. The key arrives as an unauthenticated query parameter, so `?apikey=<non-ascii>` produced an HTTP 500 instead of a 401 (#1050).
 
-  ⚠️ **Behavior tests do not distinguish this.** Both comparisons deliver the same answer, the difference lies only in the runtime. `tests/test_api_dispatch_auth.py` therefore observes the *call* of `compare_digest` via a dummy — confirmed with a mutation test that the remaining eleven tests stay green on a return to `!=`. Anyone switching the check must maintain the spy, otherwise the protection is ineffective.
+  ⚠️ **The comparison lives in `app/api_key.py` — `key_matches()` — and nowhere else.** Two copies of the comparison are the trap from #405: they drift apart, and the one that drifts compares the key in a way that can be timed or that crashes. Both call sites import it from that module.
+
+  ⚠️ **Behavior tests do not distinguish this.** Both comparisons deliver the same answer, the difference lies only in the runtime. `tests/test_api_dispatch_auth.py` therefore observes the *call* of `compare_digest` via a dummy — confirmed with a mutation test that the remaining tests stay green on a return to `!=`. Anyone switching the check must maintain the spy, otherwise the protection is ineffective.
 
 `mode=auth` returns `{"auth": "ok"}` — **no** key hash is compared, only equality.
 
@@ -123,6 +126,8 @@ Why its own path: `require_bridge_key` only knows header and query parameter. A 
 ### One transition point queue → history
 
 `_move_to_history()` in `sabnzbd_api.py` is the **only** way on which an entry moves from `download_queue` to `download_history`. `complete_download()`, `fail_download()` and `mark_manual_download()` are thin wrappers around it.
+
+⚠️ **`queue_item_from_dict()` and `history_item_from_dict()` are the only deserializers.** They turn a stored record back into an entry — with the timezone of a naive timestamp restored as UTC and the size of an older text form converted. The restore of the queue file in `app/main.py` uses `queue_item_from_dict()` as well: a second deserializer would read a different set of fields and lose the release ID and the size.
 
 Two properties are deliberately in it:
 
@@ -206,6 +211,73 @@ The bridge needs **no** CORS at all: the *arr apps are not browsers, and the web
 `BRIDGE_CORS_ORIGINS` (comma separated) is the explicit way to open the list for a deployment that operates the UI from another origin. The field `CORS_ORIGINS` is in `ENV_SOURCES` with the default `()`.
 
 ⚠️ **The allowlist is read when the module builds the app.** A change of the environment therefore needs a restart of the process — and a test that changes it has to reload `app.main` afterwards.
+
+### The persistent state lives in the data directory
+
+Two mechanisms write the state of the bridge, and **both** write into
+`DDLNZB_DATA_DIR` — the mounted volume:
+
+| Mechanism | File | Content |
+| --- | --- | --- |
+| `sabnzbd_api._persist_state()` | `<DATA_DIR>/state.json` | queue **and** history |
+| `persistence.QueuePersistence` | `<DATA_DIR>/queue.json` | queue only, atomic write via `.tmp` + `replace()` |
+
+⚠️ **Both are written at the same moment.** `_persist_state()` writes the
+state file **and** the queue file, and it runs on every change of the queue
+or the history. A queue file that is only written at the shutdown brings
+back jobs that were completed or deleted in the meantime — once the
+process dies without a clean shutdown (#1048).
+
+⚠️ **A relative path is resolved against `DATA_DIR`, never against the
+working directory of the process.** The working directory in the container
+is `/app` — its writable layer is thrown away with every rollout
+(`docker compose up -d --force-recreate`, the way Coolify restarts a
+service). The state file was written there and queue and history were
+empty again after every restart (#1049). The resolution happens in
+`BridgeConfig._resolve_paths()`; `app/settings.py::settings_path()` applies
+the same rule for the settings file, without importing `app.config` (that
+would be a cycle).
+
+⚠️ **The path is absolute.** A relative `DATA_DIR` is resolved against the
+base directory of the bridge — the directory the code lives in. That is
+stable, whatever the working directory of the process happens to be.
+
+⚠️ **The field names are the names of the dataclass.** `QueueItem` knows
+`size_bytes`, `sizeleft_bytes` and `added_at` — not `size` and
+`created_at`. The persistence layer reads a field with the helper `_feld()`,
+which handles **both** item forms (the dataclass of the queue and a plain
+dict). The old `getattr(item, name, item.get(name, default))` did not: the
+default of `getattr` is evaluated **eagerly**, so `item.get(...)` ran even
+for a dataclass — which has no `.get()` at all. The call died with an
+`AttributeError`, the broad `except Exception` swallowed it, and this
+persistence never wrote a single file (#1048).
+
+⚠️ **The restore reads the fields the persistence writes.** Without the
+release ID the restored entry is a hollow shell: the download handler needs
+it to resolve the links, and the *arr apps read the size from the queue.
+The restore builds the item with `queue_item_from_dict()` — the same
+deserializer the state file uses.
+
+### Timestamps are aware UTC
+
+Every timestamp of the bridge is an **aware** UTC datetime
+(`datetime.now(timezone.utc)`), never a naive one.
+
+⚠️ **`datetime.utcnow()` returns a naive datetime, and `datetime.timestamp()`
+reads a naive datetime as local time.** The difference fell away: with
+`TZ=Europe/Berlin` a download that had just finished appeared an hour in
+the past (#1051). The *arr apps compute their times from the Unix
+timestamp — they do not know the timezone of the container.
+
+The timezone information survives the round trip through the state file:
+`_als_utc_lesen()` reads a timestamp without a timezone as **UTC** — a
+state file of an older version was written with `datetime.utcnow()`, so it
+*is* UTC.
+
+⚠️ **The conversion to the Unix timestamp is hardened at the client
+boundary.** `_history_slot()` uses `_als_unix_timestamp()` instead of
+`datetime.timestamp()`: the latter reads a naive value as local time, and
+this is exactly the value the *arr apps compute their times from.
 
 ### Time limits are hardcoded
 
@@ -365,11 +437,15 @@ Covered by `tests/`:
 | `test_addurl_token.py` | The download token of the NZB link: release ID in the queue entry, unreadable payload refused, title/password/size from the link endpoint |
 | `test_ui_reconnect.py` | The manual reconnect updates the heartbeat state in both directions; a failed reconnect does not count as a failed ping |
 | `test_jdownloader_reconfigure.py` | `reconfigure()` names the current reason in every failure branch: missing credentials, failed login, missing device |
+| `test_api_key_comparison.py` | The key comparison runs over **bytes** — a key with a non-ASCII character is rejected with a 401 instead of crashing the request with a 500 (#1050) |
+| `test_queue_persistence.py` | The queue persistence writes a file with the field names of the dataclass, for both item forms; the restore gets the fields back; the file is written at every change (#1048) |
+| `test_state_location.py` | The state file lies under `DDLNZB_DATA_DIR` and the path is absolute (#1049) |
+| `test_history_timestamp.py` | The history timestamp is the real Unix timestamp in every timezone of the container; a naive value is read as UTC (#1051) |
 | `test_smoke.py` | Placeholder (`assert True`) |
 
 `test_monitor_intervals.py` fills `app.sabnzbd_api.download_queue` **directly** and replaces neither `asyncio.sleep` nor the time source of the handler permanently — see the `fresh_import()` warning in the parent doc. The 30-minute deadline is set via a context manager that replaces `asyncio.get_event_loop()` only during the handler call: a dummy on `loop.time` alone is not enough, because the event loop calls `self.time()` itself and the count would be off by one iteration.
 
-Still **without** tests: JDownloader connection, the heartbeat loop itself, `queue_persistence`.
+Still **without** tests: JDownloader connection, the heartbeat loop itself.
 
 ## Child DOX Index
 

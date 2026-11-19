@@ -8,17 +8,18 @@ import base64
 import json
 import logging
 import re
-import secrets
 import uuid
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app.api_key import key_matches
 from app.config import config
+from app.persistence import queue_persistence
 
 logger = logging.getLogger("ddlnzb.bridge")
 STATE_PATH = Path(config.STATE_FILE).expanduser()
@@ -173,26 +174,64 @@ def _serialize_history_item(item: "HistoryItem") -> dict:
     return data
 
 
-def _deserialize_queue_item(data: dict) -> "QueueItem":
+def _als_utc_lesen(wert: str) -> datetime:
+    """Read an ISO timestamp and return it as an aware UTC datetime.
+
+    A timestamp without a timezone comes from a state file of an older
+    version - it was written with `datetime.utcnow()`, so it **is** UTC. A
+    naive datetime would be read as local time by `timestamp()` again, and
+    the history would be off by the offset of the container (#1051).
+    """
+    gelesen = datetime.fromisoformat(wert)
+    if gelesen.tzinfo is None:
+        return gelesen.replace(tzinfo=timezone.utc)
+    return gelesen
+
+
+def _als_unix_timestamp(wert: datetime) -> int:
+    """The Unix timestamp of a datetime - a naive one is read as UTC.
+
+    `datetime.timestamp()` reads a **naive** datetime as **local** time.
+    The history of a container with `TZ=Europe/Berlin` would then be an
+    hour off, and the *arr apps compute their times from exactly this
+    value - they do not know the timezone of the container (#1051).
+
+    This is the boundary to the client: it has to be right even when the
+    value comes from somewhere that does not hold the timezone.
+    """
+    if wert.tzinfo is None:
+        wert = wert.replace(tzinfo=timezone.utc)
+    return int(wert.timestamp())
+
+
+def queue_item_from_dict(data: dict) -> "QueueItem":
     data = data.copy()
     if data.get("added_at"):
-        data["added_at"] = datetime.fromisoformat(data["added_at"])
+        data["added_at"] = _als_utc_lesen(data["added_at"])
     if not data.get("size_bytes"):
         # State file from an older version: it stored the text.
         data["size_bytes"] = _bytes_aus_groessen_text(data.get("size"))
     return QueueItem(**_bekannte_felder(QueueItem, data))
 
 
-def _deserialize_history_item(data: dict) -> "HistoryItem":
+def history_item_from_dict(data: dict) -> "HistoryItem":
     data = data.copy()
     if data.get("completed_at"):
-        data["completed_at"] = datetime.fromisoformat(data["completed_at"])
+        data["completed_at"] = _als_utc_lesen(data["completed_at"])
     if not data.get("size_bytes"):
         data["size_bytes"] = _bytes_aus_groessen_text(data.get("size"))
     return HistoryItem(**_bekannte_felder(HistoryItem, data))
 
 
 def _persist_state() -> None:
+    """Write the queue and the history to the state file.
+
+    The **queue file** (`persistence.QueuePersistence`) is written along
+    with it, at the same moment. It is the second persistence - and it has
+    to carry the same stand as the state file: a queue file that is only
+    written at the shutdown brings back jobs that were completed or deleted
+    in the meantime, once the process dies without a clean shutdown (#1048).
+    """
     try:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         state = {
@@ -203,6 +242,11 @@ def _persist_state() -> None:
     except Exception as exc:
         logger.warning("Failed to persist bridge state: %s", exc)
 
+    try:
+        queue_persistence.save(download_queue)
+    except Exception as exc:
+        logger.warning("Failed to persist the queue file: %s", exc)
+
 
 def _load_state() -> None:
     if not STATE_PATH.exists():
@@ -211,11 +255,11 @@ def _load_state() -> None:
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
         download_queue.clear()
         for item in data.get("queue", []):
-            qi = _deserialize_queue_item(item)
+            qi = queue_item_from_dict(item)
             download_queue[qi.nzo_id] = qi
         download_history.clear()
         for item in data.get("history", []):
-            hi = _deserialize_history_item(item)
+            hi = history_item_from_dict(item)
             download_history[hi.nzo_id] = hi
         logger.info(
             "Restored bridge state: %s queue items, %s history entries",
@@ -237,7 +281,7 @@ class QueueItem:
     percentage: int = 0
     eta: str = "unknown"
     timeleft: str = "0:00:00"
-    added_at: datetime = field(default_factory=datetime.utcnow)
+    added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     #: Size in bytes. The **only** source for the size output - `size`/`sizeleft`
     #: (text) and `mb`/`mbleft` (number) are derived from it. Two separately
@@ -264,7 +308,7 @@ class HistoryItem:
     name: str
     category: str
     status: str = SAB_STATUS_COMPLETED
-    completed_at: datetime = field(default_factory=datetime.utcnow)
+    completed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     storage: str = ""
 
     size_bytes: int = 0
@@ -279,8 +323,8 @@ class HistoryItem:
     links: list[str] = field(default_factory=list)
 
 
-# Must come after QueueItem and HistoryItem: _deserialize_queue_item and
-# _deserialize_history_item create instances of these two classes. An earlier
+# Must come after QueueItem and HistoryItem: queue_item_from_dict and
+# history_item_from_dict create instances of these two classes. An earlier
 # call runs into a NameError, which is swallowed by the except handler in
 # _load_state() - the queue would then be silently empty.
 _load_state()
@@ -337,7 +381,7 @@ async def sabnzbd_api(
     if not config.DDLNZB_API_KEY:
         return _error_response("Bridge API key not configured", output)
 
-    if not secrets.compare_digest(apikey or "", config.DDLNZB_API_KEY):
+    if not key_matches(apikey, config.DDLNZB_API_KEY):
         return _error_response("Invalid API key", output)
 
     if mode == "auth":
@@ -453,7 +497,7 @@ def _history_slot(item: "HistoryItem") -> dict:
         "fail_message": item.message,
         "size": _format_size(item.size_bytes),
         "bytes": item.size_bytes,
-        "completed": int(item.completed_at.timestamp()),
+        "completed": _als_unix_timestamp(item.completed_at),
         "storage": item.storage,
         "links": item.links,
     }
@@ -902,7 +946,7 @@ def _decode_download_token(payload_str: str) -> PayloadInfo | None:
 
     Why that is not an authorization bypass: the boundary of this hop is the
     **API key of the bridge**, not the token. Every mode of the dispatch is
-    gated by `secrets.compare_digest(apikey, config.DDLNZB_API_KEY)`, and
+    gated by `key_matches(apikey, config.DDLNZB_API_KEY)`, and
     that same key resolves the release against the backend -
     `GET /api/v1/links/{release_id}` selects the release by UUID **without an
     ownership check**. A caller who could forge a token therefore already

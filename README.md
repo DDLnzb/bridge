@@ -128,9 +128,9 @@ only needed for unattended setups or to override a value permanently.
 | `DELETE_ARCHIVES` | Delete archives after extraction (default `true`) | No |
 | `BRIDGE_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default `INFO`) | No |
 | `BRIDGE_CORS_ORIGINS` | Comma separated allowlist of browser origins. Empty by default — the bridge needs no CORS. Environment-only, the settings file cannot change it | No |
-| `DDLNZB_DATA_DIR` | Location of the queue and the settings file | No |
+| `DDLNZB_DATA_DIR` | Location of the queue, the settings file and the state file. **Must be mounted** — everything the bridge must not lose lives here | No |
 | `DDLNZB_SETTINGS_FILE` | Path of the settings file, default `<DDLNZB_DATA_DIR>/settings.json` | No |
-| `DDLNZB_STATE_FILE` | Path of the state file (queue + history) | No |
+| `DDLNZB_STATE_FILE` | Path of the state file (queue + history), default `<DDLNZB_DATA_DIR>/state.json`. A relative path is resolved against `DDLNZB_DATA_DIR`, never against the working directory of the process | No |
 | `DDLNZB_SETUP_TOKEN` | Setup token for the initial configuration instead of the log entry | No |
 
 ### Precedence of the configuration sources
