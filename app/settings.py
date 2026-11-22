@@ -29,6 +29,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 logger = logging.getLogger("ddlnzb.bridge.settings")
 
@@ -82,6 +83,13 @@ SECRET_FIELDS = frozenset(name for name, kind in FIELD_TYPES.items() if kind == 
 REQUIRED_FIELDS = ("DDLNZB_API_KEY",)
 
 
+class SettingsNotWritableError(OSError):
+    """The settings file cannot be written - the data directory is not writable.
+
+    A subclass of `OSError`, so the existing error handling keeps working.
+    """
+
+
 def settings_path() -> Path:
     """Path of the settings file.
 
@@ -101,6 +109,53 @@ def settings_path() -> Path:
     if not data_dir.is_absolute():
         data_dir = BASE_DIR / data_dir
     return data_dir / "settings.json"
+
+
+def not_writable_hint() -> str:
+    """Actionable hint for a data directory that cannot be written.
+
+    One source of truth for the text: the startup warning and the error of
+    the web UI use the same wording.
+
+    The usual cause is a bind mount: the directory in the image belongs to the
+    user of the container process, but a mounted host directory keeps the
+    ownership of the host - and that is usually a different one.
+    """
+    path = settings_path()
+    directory = path.parent
+    try:
+        uid, gid = os.getuid(), os.getgid()
+    except AttributeError:  # pragma: no cover - not on POSIX
+        uid = gid = 0
+    return (
+        f"{path} cannot be written: {directory} is not writable for uid {uid}/gid {gid}. "
+        f"The host directory behind the mount must belong to the container user "
+        f"(on Unraid: chown -R {uid}:{gid} <appdata directory>)."
+    )
+
+
+def storage_writable() -> bool:
+    """Can the settings file be written right now?
+
+    A real probe: a file is created and removed again. `os.access` is no
+    proof - as the root user it answers "writable" for every directory, and
+    a read-only mount would pass as well.
+
+    The probe file carries a unique name: two concurrent dashboard renders
+    must not delete each other's probe. A fixed name would let the first
+    call remove the file the second one is about to check.
+    """
+    probe = settings_path().parent / f".ddlnzb-write-probe-{os.getpid()}-{uuid4().hex[:8]}"
+    try:
+        probe.write_text("probe", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return True
 
 
 def load() -> dict[str, Any]:
@@ -153,10 +208,19 @@ def save(values: dict[str, Any]) -> dict[str, Any]:
             current[key] = value
 
     payload = {"version": SETTINGS_VERSION, "values": current}
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        # The data directory is usually a bind mount: it keeps the ownership
+        # of the host and is therefore not writable for the container user.
+        # The message names the path and the missing rights - without it the
+        # failure surfaces as an unreadable 500.
+        raise SettingsNotWritableError(
+            f"Settings cannot be saved ({exc.strerror or exc}). {not_writable_hint()}"
+        ) from exc
     _restrict_permissions(path)
 
     logger.info(
