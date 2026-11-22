@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app import settings as settings_store
 from app import webui
 from app.api_key import key_matches
 from app.config import config
@@ -55,6 +56,16 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger("ddlnzb.bridge")
     if not config.DDLNZB_API_KEY:
         logger.warning("DDLnzb API key not configured")
+
+    # The settings file lives in the data directory. If that directory cannot
+    # be written - the usual cause is a bind mount with the ownership of the
+    # host - the web UI accepts the configuration but loses it with the next
+    # restart. The warning names the path and the missing rights.
+    if not settings_store.storage_writable():
+        logger.warning(
+            "The data directory is not writable - the web UI cannot save the configuration. %s",
+            settings_store.not_writable_hint(),
+        )
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:

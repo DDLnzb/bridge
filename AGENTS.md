@@ -100,10 +100,31 @@ The bridge has three configuration layers: `settings file > environment > defaul
 The file is written by the web UI (`DDLNZB_DATA_DIR/settings.json`, mounted to
 `/app/data` in the image).
 
-The image runs as UID:GID `99:100` (`nobody:users`) to match Unraid's default
-appdata ownership, and creates `/app/data` owned by that identity so a new
-Docker named volume is writable. Bind-mounted host directories must be
-writable by UID 99 and GID 100; existing mounts retain their prior ownership.
+The image runs as UID:GID `99:100` (`nobody:users`) and creates `/app/data`
+owned by that identity — so a **new Docker named volume** (`bridge_data`) is
+writable.
+
+⚠️ **A bind mount keeps the ownership of the host.** The `chown` in the
+Dockerfile only touches the image layer; a mounted host directory shadows it.
+The host directory must therefore belong to UID 99 / GID 100 — Unraid's Docker
+GUI creates the appdata directory as `root`, so a bridge deployed by hand
+needs `chown -R 99:100 /mnt/user/appdata/<name>` once.
+
+**Without those rights the settings file cannot be written at all.** The
+symptom is a `PermissionError` on `/app/data/settings.tmp`; before 15.11.2026
+the web UI answered the initial setup with an unhandled 500 and a traceback.
+Now the bridge names the cause itself:
+
+| Place | What it does |
+| --- | --- |
+| Startup (lifespan) | Warning: the data directory is not writable, with the path and the missing rights |
+| `POST /ui/setup` | HTTP 500 with a readable message — the setup token stays valid, the form can be sent again |
+| `POST /ui/settings` | Redirect with the flash `not-writable` |
+| Dashboard | Badge `not writable` next to the settings file |
+
+`settings.storage_writable()` probes the directory with a **real write** (a
+file is created and removed again) — `os.access` is no proof, it answers
+"writable" for the root user.
 
 ⚠️ **The data directory is the one place where the state lives.** Queue,
 history and the settings file belong there — it is the only path that
@@ -338,8 +359,8 @@ poetry run python -m pytest tests/ -v
 
 ⚠️ `tests/test_smoke.py` is a placeholder (`assert True`). The bridge tests
 **run locally** — the CI job `tests` was removed on 12.11.2026, so the `bridge`
-arm of the `lint` job now only runs `ruff`. The suite has 21 test files with
-167 test cases (as of 18.11.2026). Covered are auth, API
+arm of the `lint` job now only runs `ruff`. The suite has 23 test files with
+177 test cases (as of 22.11.2026). Covered are auth, API
 dispatch, cloud links, queue transitions, state restore, the poll intervals of
 `_monitor_jdownloader` (with a stubbed JDownloader, not against a real
 connection), the payload format (`tests/test_payload.py`: JSON v2, legacy
@@ -379,7 +400,8 @@ Four files came with the batch of 30.10.2026:
   missing device. A branch that returned `False` without setting `last_error`
   would leave the error of an earlier attempt standing in the status (#681).
 
-Four files came with the batch of 18.11.2026 (the four bridge findings):
+Five files came with the two batches of November 2026 (the four bridge
+findings of 18.11.2026 and the fix of 15.11.2026):
 
 - `test_api_key_comparison.py` — the API key comparison runs over **bytes**:
   a key with a non-ASCII character is rejected with a 401 instead of
@@ -401,6 +423,11 @@ Four files came with the batch of 18.11.2026 (the four bridge findings):
   same value under `TZ=UTC` and `TZ=Europe/Berlin` (#1051). A naive
   timestamp — the form a state file of an older version holds — is read as
   UTC at the client boundary too.
+- `test_settings_writable.py` — a data directory that cannot be written:
+  `save()` reports it as `SettingsNotWritableError`, `storage_writable()`
+  probes the directory with a real write, the setup route answers with a
+  readable message instead of a traceback, and the dashboard shows the state
+  of the directory (#935).
 
   ⚠️ **The fixture `in_zeitzone` restores the timezone itself.** The
   teardown of `monkeypatch` runs *after* the teardown of the fixture, so a

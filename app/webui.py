@@ -207,6 +207,7 @@ def _view(request: Request) -> dict[str, Any]:
         "queue_downloading": downloading,
         "config_source": "settings file" if stored else "environment",
         "settings_path": str(settings_store.settings_path()),
+        "storage_writable": settings_store.storage_writable(),
         "started_at": _STARTED_AT.astimezone().strftime("%d.%m.%Y %H:%M:%S"),
         "version": "1.0.0",
         "category_summary": f"{categories} (+{max(len(mapping) - 3, 0)} more)"
@@ -283,7 +284,15 @@ async def setup(request: Request):
         if raw:
             values[field] = raw
 
-    settings_store.save(values)
+    try:
+        settings_store.save(values)
+    except OSError as exc:
+        # The data directory is not writable - the setup is not lost, only
+        # delayed: the token stays valid and the form can be sent again
+        # after the rights on the host have been corrected.
+        logger.error("Settings could not be saved: %s", exc)
+        return HTMLResponse(setup_page(str(exc)), status_code=500)
+
     config.reload()
 
     # The token is used up - a second use is thereby excluded.
@@ -303,6 +312,9 @@ async def save_settings(request: Request):
 
     try:
         settings_store.save(values)
+    except settings_store.SettingsNotWritableError:
+        logger.error("Settings could not be saved: %s", settings_store.not_writable_hint())
+        return RedirectResponse("/ui?flash=not-writable", status_code=303)
     except OSError as exc:
         logger.error("Settings could not be saved: %s", exc)
         return RedirectResponse("/ui?flash=error", status_code=303)

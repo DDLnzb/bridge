@@ -104,6 +104,11 @@ _FLASH_TEXTS = {
     "reconnect": ("ok", "JDownloader reconnected."),
     "reset": ("ok", "Reset. The values from the environment apply again."),
     "error": ("err", "The change could not be saved."),
+    "not-writable": (
+        "err",
+        "The change could not be saved: the settings directory is not writable. "
+        "The details are in the container log.",
+    ),
     "test-failed": ("err", "The connection tests failed."),
 }
 
@@ -329,6 +334,13 @@ def dashboard_page(view: dict) -> str:
 
     api_key_badge = badge("set", "ok") if view["api_key_set"] else badge("not set", "err")
     jd_password_badge = badge("set", "ok") if view["jd_password_set"] else badge("not set", "warn")
+    # A settings directory that cannot be written means: the configuration
+    # entered here is lost with the next restart of the container.
+    settings_state = (
+        badge("writable", "ok")
+        if view.get("storage_writable", True)
+        else badge("not writable", "err")
+    )
 
     content = f"""
 <header class="page-head">
@@ -489,7 +501,7 @@ def dashboard_page(view: dict) -> str:
         <dt>Running since</dt>
         <dd>{escape(view["started_at"])}</dd>
         <dt>Settings file</dt>
-        <dd><code>{escape(view["settings_path"])}</code></dd>
+        <dd><code>{escape(view["settings_path"])}</code> {settings_state}</dd>
         <dt>Configuration source</dt>
         <dd>{escape(view["config_source"])}</dd>
         <dt>Category mapping</dt>

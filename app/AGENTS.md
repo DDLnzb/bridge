@@ -98,6 +98,35 @@ The file is applied in two places:
 
 ⚠️ **`CORS_ORIGINS` is environment-only.** The settings file only carries the fields from `FIELD_TYPES` — the CORS allowlist is not among them, so it can only be set via `BRIDGE_CORS_ORIGINS`. That is deliberate: the allowlist decides which browser origins may talk to the bridge at all, and a web form must not be able to widen it.
 
+### The settings file needs a writable directory
+
+The file is written into `DDLNZB_DATA_DIR` (in the image `/app/data`). A
+**bind mount** shadows the ownership that the image sets up — the mounted host
+directory belongs to whoever owns it on the host, and the container process
+(UID 99 / GID 100) then cannot write there.
+
+`settings.save()` therefore reports the failure as **`SettingsNotWritableError`**
+(a subclass of `OSError`, so the existing handlers keep working) and names the
+path, the missing rights and the way out. `settings.not_writable_hint()` is the
+**one** source of that text — the startup warning and the error of the web UI
+use the same wording.
+
+`settings.storage_writable()` answers the question with a **real write**: it
+creates a probe file and removes it again. `os.access` is no proof — as the
+root user it answers "writable" for every directory.
+
+The two write routes react differently:
+
+| Route | Reaction |
+| --- | --- |
+| `POST /ui/setup` | HTTP 500 with the message on the setup page; the setup token **stays valid** — the form can be sent again after the rights have been corrected |
+| `POST /ui/settings` | Redirect with the flash `not-writable` |
+
+⚠️ **The dashboard probes the directory on every page view.** That is the
+price of showing the state (`badge` `writable` / `not writable` next to the
+settings file) — a configuration that cannot be saved would otherwise be lost
+with the next restart of the container, without any notice.
+
 ### The web UI (`webui.py`)
 
 | File | Content |
@@ -436,6 +465,7 @@ Covered by `tests/`:
 | `test_default_urls.py` | One implementation, one default: no `src/`, no host without DNS in a shipped file, the API default in exactly one Python file, the live host resolves |
 | `test_addurl_token.py` | The download token of the NZB link: release ID in the queue entry, unreadable payload refused, title/password/size from the link endpoint |
 | `test_ui_reconnect.py` | The manual reconnect updates the heartbeat state in both directions; a failed reconnect does not count as a failed ping |
+| `test_settings_writable.py` | A data directory that cannot be written: `save()` reports it as `SettingsNotWritableError`, `storage_writable()` probes it, the setup route answers with a readable message instead of a traceback, the dashboard shows the state |
 | `test_jdownloader_reconfigure.py` | `reconfigure()` names the current reason in every failure branch: missing credentials, failed login, missing device |
 | `test_api_key_comparison.py` | The key comparison runs over **bytes** — a key with a non-ASCII character is rejected with a 401 instead of crashing the request with a 500 (#1050) |
 | `test_queue_persistence.py` | The queue persistence writes a file with the field names of the dataclass, for both item forms; the restore gets the fields back; the file is written at every change (#1048) |
